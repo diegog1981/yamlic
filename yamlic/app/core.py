@@ -142,7 +142,7 @@ LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|velet
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 # entita che non sono luci vere: opzioni, indicatori, schermi
 NOT_LIGHT = re.compile(r"update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
-ROOMS = [{"soggiorno", "salotto", "living", "sala", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
+ROOMS = [{"soggiorno", "salotto", "living", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
 
 def room_words(w):
     for g in ROOMS:
@@ -165,7 +165,7 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
     for s in states:
         eid = s["entity_id"]
         name = (s.get("attributes") or {}).get("friendly_name", "")
-        text = (eid + " " + name).lower().replace("_", " ")
+        text = _t(s)
         if _dom(eid) == "person":
             obj = eid.split(".", 1)[1].lower().replace("_", " ")
             named = any(t in words for t in re.findall(r"\w{3,}", (obj + " " + name.lower()))) 
@@ -222,6 +222,11 @@ def prune_unknown(y, known):
 ALL_LIGHTS = re.compile(r"\btutt\w*\s+(?:le\s+|i\s+|gli\s+)?(?:luc\w*|lamp\w*|farett\w*|illuminazion\w*)")
 STOP = set("quando spegni accendi accendere spegnere chiudi apri alle della delle dello degli sempre ogni dopo prima".split())
 
+def _t(s):
+    """Testo su cui si cercano stanze e parole: id + nome + area di Home Assistant."""
+    a = s.get("attributes") or {}
+    return (s["entity_id"] + " " + (a.get("friendly_name") or "") + " " + (a.get("_area") or "")).lower().replace("_", " ")
+
 def _nm(s):
     return (s.get("attributes") or {}).get("friendly_name", "") or s["entity_id"]
 
@@ -231,7 +236,7 @@ def ambiguity(states, prompt, io_person=""):
     lightlike = []
     for s in states:
         eid = s["entity_id"]
-        text = (eid + " " + _nm(s)).lower().replace("_", " ")
+        text = _t(s)
         if is_light_like(eid, text):
             lightlike.append({"id": eid, "nome": _nm(s), "gruppo": _dom(eid), "t": text})
     lightlike.sort(key=lambda o: (o["gruppo"] != "light", o["nome"].lower()))
@@ -248,7 +253,7 @@ def ambiguity(states, prompt, io_person=""):
                     cov = []
                     if re.search(r"tapparell|\btend|serrand", low):
                         cov = [{"id": c["entity_id"], "nome": _nm(c), "gruppo": "cover"} for c in states
-                               if _dom(c["entity_id"]) == "cover" and any(x in (c["entity_id"] + " " + _nm(c)).lower().replace("_", " ") for x in syn)]
+                               if _dom(c["entity_id"]) == "cover" and any(x in _t(c) for x in syn)]
                     return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d luci%s. Quali includo?" % (w, len(hit), (" e %d tende o tapparelle" % len(cov)) if cov else ""), "opzioni": opts(hit) + cov}
         nl = sum(o["gruppo"] == "light" for o in lightlike); ns = len(lightlike) - nl
         if ns:
@@ -265,7 +270,7 @@ def ambiguity(states, prompt, io_person=""):
         if w in GENERIC or w in STOP:
             continue
         pool = lightlike if "light" in wanted else [
-            {"id": s["entity_id"], "nome": _nm(s), "gruppo": "cover", "t": (s["entity_id"] + " " + _nm(s)).lower().replace("_", " ")}
+            {"id": s["entity_id"], "nome": _nm(s), "gruppo": "cover", "t": _t(s)}
             for s in states if "cover" in wanted and _dom(s["entity_id"]) == "cover"]
         syn = room_words(w)
         hit = [o for o in pool if any(x in o["t"] for x in syn)]

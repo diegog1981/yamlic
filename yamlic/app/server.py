@@ -131,6 +131,24 @@ def ha(path, data=None):
         return json.loads(raw) if raw else None
 
 
+_AREE = {"t": 0, "d": {}}
+AREE_TPL = "{%- set o = namespace(l=[]) -%}{%- for s in states -%}{%- set a = area_name(s.entity_id) -%}{%- if a -%}{%- set o.l = o.l + [[s.entity_id, a]] -%}{%- endif -%}{%- endfor -%}{{ o.l | tojson }}"
+
+def aree():
+    """entita -> nome dell'area in Home Assistant (cache 60 s; se non riesce, vuoto)."""
+    if time.time() - _AREE["t"] < 60:
+        return _AREE["d"]
+    try:
+        req = urllib.request.Request(HA + "/template", data=json.dumps({"template": AREE_TPL}).encode(), method="POST",
+                                     headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            _AREE["d"] = {e: a for e, a in json.loads(r.read().decode())}
+    except Exception:
+        pass
+    _AREE["t"] = time.time()
+    return _AREE["d"]
+
+
 def llm_call(payload, timeout=900):
     h = {"Content-Type": "application/json"}
     if OPT.get("llm_key"):
@@ -144,7 +162,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.5"
+VERSIONE = "0.3.7"
 _RETE = {"t": 0, "v": None}
 
 
@@ -173,6 +191,10 @@ def rete_info():
 # ---------- cliente ----------
 def generate(prompt, scelte=None, persona="", salta=False):
     states = ha("/states")
+    ar = aree()
+    for st_ in states:
+        if st_["entity_id"] in ar:
+            st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
     io = persona or OPT.get("io_person") or ""
     if not scelte and not salta and not persona:
         dom = core.ambiguity(states, prompt, io)
