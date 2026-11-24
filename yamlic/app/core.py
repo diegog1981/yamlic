@@ -138,27 +138,69 @@ DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover
            "esco": "person", "esce": "person", "arriv": "person", "rientr": "person", "uscit": "person",
            "movimento": "binary_sensor", "porta": "binary_sensor", "finestra": "binary_sensor"}
 
+LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
+FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
+
 def select_entities(states, prompt, io_person="", limit=15):
+    """Sceglie le entita da mostrare al modello. Le persone solo se nominate (o 'io'): per 'esco/rientro'
+    senza nome vale zone.home, cioe tutte le persone di casa."""
     words = set(re.findall(r"\w{4,}", prompt.lower()))
     low = prompt.lower()
-    wanted = {d for k, d in DOMAINS.items() if k in low}
-    scored = []
+    wanted = {d for k, d in DOMAINS.items() if k in low and d != "person"}
+    if re.search(r"\btutt", low):
+        limit = max(limit, 40)
+    persons, scored = [], []
     for s in states:
         eid = s["entity_id"]
         name = (s.get("attributes") or {}).get("friendly_name", "")
         text = (eid + " " + name).lower().replace("_", " ")
-        bonus = 3 if _dom(eid) in wanted else 0
-        scored.append((sum(w in text for w in words) + bonus, eid, name))
+        if _dom(eid) == "person":
+            obj = eid.split(".", 1)[1].lower().replace("_", " ")
+            named = any(t in words for t in re.findall(r"\w{3,}", (obj + " " + name.lower()))) 
+            if named or (io_person == eid and FIRST.search(low)):
+                persons.append((eid, name))
+            continue
+        light_like = "light" in wanted and _dom(eid) == "switch" and bool(LIGHT_LIKE.search(text))
+        bonus = 3 if (_dom(eid) in wanted or light_like) else 0
+        scored.append((sum(w in text for w in words) + bonus, eid, name, light_like))
     if wanted:
-        keep = [x for x in scored if _dom(x[1]) in wanted or x[1] == "zone.home"]
+        keep = [x for x in scored if _dom(x[1]) in wanted or x[3] or x[1] == "zone.home"]
         if keep:
             scored = keep
-    scored.sort(reverse=True)
-    top = [(e, n) for _, e, n in scored]
-    first = sorted([x for x in top if x[0].startswith("person.")], key=lambda x: x[0] != io_person)[:3]
-    rest = [x for x in top if x not in first and x[0] != "zone.home"]
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    top = [(e, n) for _, e, n, _ in scored]
     zone = [x for x in top if x[0] == "zone.home"]
-    return (zone + first + rest)[:limit], {s["entity_id"] for s in states}
+    rest = [x for x in top if x[0] != "zone.home"]
+    persons.sort(key=lambda x: x[0] != io_person)
+    return (zone + persons[:3] + rest)[:limit], {s["entity_id"] for s in states}
+
+def prune_unknown(y, known):
+    """Toglie dalle liste di entita delle azioni quelle inesistenti (se ne resta almeno una valida).
+    Restituisce (yaml, [entita tolte])."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y, []
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y, []
+    removed = []
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in list(x.items()):
+                if k == "entity_id" and isinstance(v, list):
+                    ok = [e for e in v if not isinstance(e, str) or e in known]
+                    if ok and len(ok) < len(v):
+                        removed.extend(e for e in v if e not in ok)
+                        x[k] = ok
+                else:
+                    walk(v)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+    walk(cfg["actions"])
+    if not removed:
+        return y, []
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n"), removed
 
 # ---------- estrazione YAML ----------
 def extract_yaml(text):

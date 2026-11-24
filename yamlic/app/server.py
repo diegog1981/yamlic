@@ -98,7 +98,7 @@ def generate(prompt):
 
         def accept(r):
             try:
-                return not core.validate(anon.restore(core.extract_yaml(text_of(r))), known, prompt, remote=True)
+                return not core.validate(core.prune_unknown(anon.restore(core.extract_yaml(text_of(r))), known)[0], known, prompt, remote=True)
             except Exception:
                 return False
         try:
@@ -109,7 +109,10 @@ def generate(prompt):
             return {"error": "rete non disponibile: %s%s" % (ex, (" / locale: " + err) if err else "")}
     if res is None:
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
+    y, tolte = core.prune_unknown(y, known)
     problems = core.validate(y, known, prompt, remote=via != "locale")
+    if tolte:
+        problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
     if anon and anon.unresolved(y):
         problems.append("alias rimasti: " + ", ".join(anon.unresolved(y)))
     usage = res.get("usage", {})
