@@ -534,6 +534,6 @@ def validate(y, known, prompt="", remote=False):
     for c in cfg.get("conditions") or []:
         if not isinstance(c, dict) or "condition" not in c:
             p.append("condizione senza 'condition'"); continue
-        if c["condition"] not in {"state", "numeric_state", "time", "sun", "template", "zone", "trigger"}:
+        if c["condition"] not in {"state", "numeric_state", "time", "sun", "template", "zone", "trigger", "or", "and", "not"}:
             p.append("condizione sconosciuta: %s" % c["condition"])
     return list(dict.fromkeys(p))
