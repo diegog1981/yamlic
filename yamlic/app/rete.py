@@ -96,6 +96,21 @@ def clean_payload(p):
             "temperature": min(float(p.get("temperature", 0.2)), 1.0)}
 
 
+STATO = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Rete Yamlic</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:2em auto;padding:0 1em;color:#1c1c1e;background:#f5f5f7}
+@media(prefers-color-scheme:dark){body{color:#eee;background:#1b1b1d}.c{background:#2a2a2d!important}}
+.c{background:#fff;border-radius:12px;padding:1em 1.2em;margin:1em 0}.n{font-size:2.2em;font-weight:700}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.4em .2em;border-bottom:1px solid #8884}.s{opacity:.65;font-size:.9em}</style>
+<h2>Rete Yamlic</h2><div class=c><div class=n id=n>-</div><div class=s>nodi attivi adesso</div></div>
+<div class=c><table id=t><tr><th>Nodo</th><th>Velocit&agrave;</th><th>Modello</th></tr></table></div>
+<div class=s id=x></div>
+<script>async function g(){try{const j=await (await fetch('health')).json();n.textContent=j.nodi;
+t.innerHTML='<tr><th>Nodo</th><th>Velocit&agrave;</th><th>Modello</th></tr>'+(j.lista||[]).map(o=>'<tr><td>'+o.id+'</td><td>'+(o.tps==null?'-':o.tps+' token/s')+'</td><td>'+(o.modello||'-')+'</td></tr>').join('');
+x.textContent='Richieste servite: '+j.riusciti+' su '+j.jobs+' &middot; clienti collegati: '+j.clienti;x.innerHTML=x.textContent}catch(e){x.textContent='Smistatore non raggiungibile'}}
+g();setInterval(g,10000)</script>"""
+
+
 # ---------- smistatore ----------
 class Bucket:
     def __init__(self, per_min):
@@ -122,12 +137,17 @@ class Relay:
 
     def app(self):
         a = web.Application()
-        a.add_routes([web.get("/ws", self.ws), web.get("/health", self.health)])
+        a.add_routes([web.get("/ws", self.ws), web.get("/health", self.health), web.get("/stato", self.stato)])
         return a
 
     async def health(self, req):
-        nodes = [p for p in self.peers.values() if "node" in p["roles"]]
-        return web.json_response({"ok": True, "nodi": len(nodes), "clienti": len(self.peers) - len(nodes), **self.stats})
+        nodes = [(i, p) for i, p in self.peers.items() if "node" in p["roles"]]
+        lista = sorted(({"id": i[:6], "tps": (p.get("cap") or {}).get("tps"), "modello": (p.get("cap") or {}).get("model")} for i, p in nodes),
+                       key=lambda x: -(x["tps"] or 0))
+        return web.json_response({"ok": True, "nodi": len(nodes), "clienti": len(self.peers) - len(nodes), "lista": lista, **self.stats})
+
+    async def stato(self, req):
+        return web.Response(text=STATO, content_type="text/html")
 
     async def ws(self, req):
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_BLOB * 2)

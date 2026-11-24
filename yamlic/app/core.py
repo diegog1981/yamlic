@@ -136,18 +136,18 @@ class Anon:
 # ---------- scelta entita ----------
 DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover", "clima": "climate",
            "esco": "person", "esce": "person", "arriv": "person", "rientr": "person", "uscit": "person",
-           "movimento": "binary_sensor", "porta": "binary_sensor", "finestra": "binary_sensor"}
+           " tend": "cover", "movimento": "binary_sensor", "porta": "binary_sensor", "finestra": "binary_sensor"}
 
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 
-def select_entities(states, prompt, io_person="", limit=15):
+def select_entities(states, prompt, io_person="", limit=15, only=None):
     """Sceglie le entita da mostrare al modello. Le persone solo se nominate (o 'io'): per 'esco/rientro'
     senza nome vale zone.home, cioe tutte le persone di casa."""
     words = set(re.findall(r"\w{4,}", prompt.lower()))
     low = prompt.lower()
     wanted = {d for k, d in DOMAINS.items() if k in low and d != "person"}
-    if re.search(r"\btutt", low):
+    if re.search(r"\btutt", low) or only:
         limit = max(limit, 40)
     persons, scored = [], []
     for s in states:
@@ -172,6 +172,9 @@ def select_entities(states, prompt, io_person="", limit=15):
     zone = [x for x in top if x[0] == "zone.home"]
     rest = [x for x in top if x[0] != "zone.home"]
     persons.sort(key=lambda x: x[0] != io_person)
+    if only:
+        names = {s["entity_id"]: (s.get("attributes") or {}).get("friendly_name", "") for s in states}
+        rest = [(e, names.get(e, "")) for e in only if e in names and _dom(e) != "person"]
     return (zone + persons[:3] + rest)[:limit], {s["entity_id"] for s in states}
 
 def prune_unknown(y, known):
@@ -201,6 +204,82 @@ def prune_unknown(y, known):
     if not removed:
         return y, []
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n"), removed
+
+
+# ---------- domande di chiarimento (regole fisse, non il modello) ----------
+ALL_LIGHTS = re.compile(r"\btutt\w*\s+(?:le\s+|i\s+|gli\s+)?(?:luc\w*|lamp\w*|farett\w*|illuminazion\w*)")
+STOP = set("quando spegni accendi accendere spegnere chiudi apri alle della delle dello degli sempre ogni dopo prima".split())
+
+def _nm(s):
+    return (s.get("attributes") or {}).get("friendly_name", "") or s["entity_id"]
+
+def ambiguity(states, prompt, io_person=""):
+    """Se la richiesta e ambigua restituisce una domanda {tipo, testo, opzioni}, altrimenti None."""
+    low = prompt.lower()
+    lightlike = []
+    for s in states:
+        eid = s["entity_id"]
+        text = (eid + " " + _nm(s)).lower().replace("_", " ")
+        if _dom(eid) == "light" or (_dom(eid) == "switch" and LIGHT_LIKE.search(text)):
+            lightlike.append({"id": eid, "nome": _nm(s), "gruppo": _dom(eid), "t": text})
+    lightlike.sort(key=lambda o: (o["gruppo"] != "light", o["nome"].lower()))
+    opts = lambda l: [{k: v for k, v in o.items() if k != "t"} for o in l]
+    # A: "tutte le luci" e in casa ci sono anche interruttori che sembrano luci
+    if ALL_LIGHTS.search(low):
+        nl = sum(o["gruppo"] == "light" for o in lightlike); ns = len(lightlike) - nl
+        if ns:
+            return {"tipo": "multi", "testo": "Ho trovato %d %s e %d %s che sembrano luci. Quali includo?" % (nl, "luce" if nl == 1 else "luci", ns, "interruttore" if ns == 1 else "interruttori"),
+                    "opzioni": opts(lightlike)[:40]}
+        return None
+    # B: "io", "mio" senza persona impostata e piu persone in casa
+    persons = [s for s in states if _dom(s["entity_id"]) == "person"]
+    if FIRST.search(low) and not io_person and len(persons) >= 2:
+        return {"tipo": "uno", "testo": "Chi sei?", "opzioni": [{"id": s["entity_id"], "nome": _nm(s)} for s in persons]}
+    # C: una stanza o un nome che corrisponde a molte entita dello stesso tipo
+    wanted = {d for k, d in DOMAINS.items() if k in low and d in ("light", "cover")}
+    for w in re.findall(r"[a-zà-ÿ]{4,}", low):
+        if w in GENERIC or w in STOP:
+            continue
+        pool = lightlike if "light" in wanted else [
+            {"id": s["entity_id"], "nome": _nm(s), "gruppo": "cover", "t": (s["entity_id"] + " " + _nm(s)).lower().replace("_", " ")}
+            for s in states if "cover" in wanted and _dom(s["entity_id"]) == "cover"]
+        hit = [o for o in pool if w in o["t"]]
+        if 3 <= len(hit) <= 15:
+            return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d entit\u00e0. Quali includo?" % (w, len(hit)), "opzioni": opts(hit)}
+    return None
+
+def fix_domains(y):
+    """Se light.turn_* ha tra i target degli interruttori (switch.*), li sposta in una azione switch.turn_*."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    out, changed = [], False
+    for a in cfg["actions"]:
+        svc = str(a.get("action", "")) if isinstance(a, dict) else ""
+        if svc.startswith("light.") and svc.split(".", 1)[1] in {"turn_on", "turn_off", "toggle"}:
+            ents = _target_ents(a)
+            sw = [e for e in ents if isinstance(e, str) and e.startswith("switch.")]
+            if sw:
+                li = [e for e in ents if e not in sw]
+                changed = True
+                if li:
+                    first = {k: v for k, v in a.items() if k not in ("target", "entity_id")}
+                    first["target"] = {"entity_id": li}
+                    out.append(first)
+                out.append({"action": "switch." + svc.split(".", 1)[1], "target": {"entity_id": sw}})
+                continue
+        out.append(a)
+    if not changed:
+        return y
+    cfg["actions"] = out
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+def clean(y, known):
+    """fix_domains + prune_unknown. Restituisce (yaml, entita_tolte)."""
+    return prune_unknown(fix_domains(y), known)
 
 # ---------- estrazione YAML ----------
 def extract_yaml(text):
