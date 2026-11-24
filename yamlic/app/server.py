@@ -35,7 +35,8 @@ PAGE = r"""<!doctype html><html lang=it><meta charset=utf-8><meta name=viewport 
 <title>Yamlic</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--tx:#1d1d1f;--mu:#6b6f76;--ac:#2563eb;--ok:#16a34a;--wa:#b45309;--er:#dc2626;--bd:#e3e5e8;--code:#f0f2f5}
-@media(prefers-color-scheme:dark){:root{--bg:#161719;--card:#222326;--tx:#ececee;--mu:#9a9ea6;--ac:#6ea0ff;--ok:#4ade80;--wa:#fbbf24;--er:#f87171;--bd:#34363a;--code:#1a1b1e}}
+@media(prefers-color-scheme:dark){:root:not([data-tema]){--bg:#161719;--card:#222326;--tx:#ececee;--mu:#9a9ea6;--ac:#6ea0ff;--ok:#4ade80;--wa:#fbbf24;--er:#f87171;--bd:#34363a;--code:#1a1b1e}}
+:root[data-tema=scuro]{--bg:#161719;--card:#222326;--tx:#ececee;--mu:#9a9ea6;--ac:#6ea0ff;--ok:#4ade80;--wa:#fbbf24;--er:#f87171;--bd:#34363a;--code:#1a1b1e}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
 main{max-width:760px;margin:0 auto;padding:1.2em 1em 3em}
 header{display:flex;justify-content:space-between;align-items:center;gap:1em;flex-wrap:wrap}
@@ -57,7 +58,7 @@ pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overf
 .hide{display:none}.mu{color:var(--mu);font-size:.9em}
 </style>
 <main>
-<header><h1>Yamlic<small id=ver></small></h1><span class=pill id=rete><span class=dot></span>rete...</span></header>
+<header><h1>Yamlic<small id=ver></small></h1><span class=row style="margin:0"><button id=tm class=s type=button title="Tema">Tema: auto</button><span class=pill id=rete><span class=dot></span>rete...</span></span></header>
 <div class=card>
 <textarea id=p rows=3 placeholder="Scrivi cosa vuoi, per esempio: quando esco di casa spegni tutte le luci"></textarea>
 <div class=row><button id=b>Genera automazione</button><span id=s class=mu></span></div>
@@ -66,13 +67,16 @@ pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overf
 <div id=r class="card hide">
 <div class=chips id=st></div>
 <pre id=y></pre>
-<div class=row><button id=cp>Copia YAML</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
+<div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
 <div id=w></div>
 </div>
 <p class=mu>Controlla sempre l'automazione prima di usarla. Per metterla in Home Assistant: Impostazioni, Automazioni, Crea, Modifica in YAML, incolla.</p>
 </main>
 <script>
 const $=i=>document.getElementById(i);let busy=false;
+(function(){const T=['auto','chiaro','scuro'];let t='auto';try{t=localStorage.getItem('yamlic_tema')||'auto'}catch(e){}
+ function ap(){if(t=='auto')document.documentElement.removeAttribute('data-tema');else document.documentElement.setAttribute('data-tema',t);$('tm').textContent='Tema: '+t}
+ ap();$('tm').onclick=()=>{t=T[(T.indexOf(t)+1)%3];try{localStorage.setItem('yamlic_tema',t)}catch(e){}ap()}})();
 function esc(t){return String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function copia(t){const done=()=>{$('msg').textContent='Copiato';setTimeout(()=>$('msg').textContent='',2000)};
  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done)}
@@ -90,12 +94,13 @@ function stats(j){const s=j.stats||{};const c=[];if(s.secondi!=null)c.push('<spa
  if(s.token_risposta&&s.secondi>0)c.push('<span class=chip><b>'+Math.round(s.token_risposta/s.secondi)+'</b> token/s</span>');
  $('st').innerHTML=c.join('')}
 function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.remove('hide');
- if(j.error){$('y').textContent='';$('st').innerHTML='';$('cp').classList.add('hide');$('sv').classList.add('hide');
+ if(j.error){$('y').textContent='';$('st').innerHTML='';$('cp').classList.add('hide');$('cs').classList.add('hide');$('sv').classList.add('hide');
   $('w').innerHTML='<div class="warn err">'+esc(j.error)+(j.problems?' ('+esc(j.problems.join(', '))+')':'')+'</div>';return}
- $('cp').classList.remove('hide');$('y').textContent=j.yaml||'';stats(j);
+ $('cp').classList.remove('hide');$('cs').classList.remove('hide');$('y').textContent=j.yaml||'';stats(j);
  $('w').innerHTML=(j.problems&&j.problems.length)?'<div class=warn><b>Da controllare</b><br>'+j.problems.map(esc).join('<br>')+'</div>':'';
  $('sv').classList.toggle('hide',!window.__salva);
  $('cp').onclick=()=>copia(j.yaml||'');
+ $('cs').onclick=()=>{const st=j.stats||{};copia(['Yamlic '+$('ver').textContent+' - '+(st.via||'')+(st.secondi!=null?' - '+st.secondi+' s':''),'','Richiesta: '+$('p').value.trim(),'','YAML:',j.yaml||'','','Avvisi: '+((j.problems&&j.problems.length)?j.problems.join(' | '):'nessuno'),'','Cosa non va: '].join('\n'))};
  $('sv').onclick=async()=>{const x=await (await fetch('api/create',{method:'POST',body:JSON.stringify({yaml:j.yaml})})).json();$('msg').textContent=x.ok?'Salvata in Home Assistant':(x.error||'errore')}}
 function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
  let h='<b>'+esc(d.testo)+'</b>';
@@ -139,7 +144,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.4"
+VERSIONE = "0.3.5"
 _RETE = {"t": 0, "v": None}
 
 
