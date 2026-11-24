@@ -118,7 +118,7 @@ class Relay:
         self.buckets = {}
         self.others = list(other_relays)
         self.client_per_min = client_per_min
-        self.stats = {"jobs": 0, "ok": 0, "err": 0, "since": int(time.time())}
+        self.stats = {"jobs": 0, "riusciti": 0, "err": 0, "since": int(time.time())}
 
     def app(self):
         a = web.Application()
@@ -183,7 +183,7 @@ class Relay:
             k = (m.get("rid"), me)
             c = self.pending.pop(k, None)
             if c and c[0] in self.peers:
-                self.stats["ok" if t == "res" else "err"] += 1
+                self.stats["riusciti" if t == "res" else "err"] += 1
                 await self.peers[c[0]]["ws"].send_json({"t": t, "rid": m["rid"], "from": me, "box": m.get("box"), "m": m.get("m")})
         for k in [k for k, v in self.pending.items() if time.time() - v[1] > 300]:
             self.pending.pop(k, None)
