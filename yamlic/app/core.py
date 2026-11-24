@@ -203,9 +203,9 @@ def prune_unknown(y, known):
         if isinstance(x, dict):
             for k, v in list(x.items()):
                 if k == "entity_id" and isinstance(v, list):
-                    ok = [e for e in v if not isinstance(e, str) or e in known]
+                    ok = [e for e in v if isinstance(e, str) and e in known]
                     if ok and len(ok) < len(v):
-                        removed.extend(e for e in v if e not in ok)
+                        removed.extend(str(e) if not isinstance(e, dict) else ": ".join(str(a) for a in next(iter(e.items()))) for e in v if not (isinstance(e, str) and e in known))
                         x[k] = ok
                 else:
                     walk(v)
@@ -297,6 +297,28 @@ def fix_domains(y):
         return y
     cfg["actions"] = out
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+def unknown_entities(y, known):
+    """Entita citate ovunque nel YAML (anche dentro choose/conditions) che non esistono in casa."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return []
+    bad = []
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == "entity_id":
+                    for e in (v if isinstance(v, list) else [v]):
+                        if not isinstance(e, str) or (re.fullmatch(r"[a-z_]+\.[\w]+", e) and e not in known):
+                            bad.append(e if isinstance(e, str) else str(e))
+                else:
+                    walk(v)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+    walk(cfg)
+    return sorted(set(bad))
 
 TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|tramonto|alba|\bsera\b|mattina|notte|minut|\bore\b|esco|esce|rientr|arriv|uscit|movimento|\bapr|chiud|premo|premuto|pulsante|temperatura|umidit|piove|pioggia|\bsole\b")
 

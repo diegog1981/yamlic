@@ -139,7 +139,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.1"
+VERSIONE = "0.3.2"
 _RETE = {"t": 0, "v": None}
 
 
@@ -213,6 +213,9 @@ def generate(prompt, scelte=None, persona="", salta=False):
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
+    ignote = core.unknown_entities(y, known)
+    if ignote:
+        problems.append("entita che non esistono in casa, da correggere a mano: " + ", ".join(ignote))
     if anon and anon.unresolved(y):
         problems.append("alias rimasti: " + ", ".join(anon.unresolved(y)))
     usage = res.get("usage", {})
