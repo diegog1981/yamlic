@@ -1,0 +1,46 @@
+configuration:
+  modo:
+    name: Where to run the model
+    description: "auto = use your own model if available, otherwise the network. locale = your own model only. rete = network only."
+  usa_rete:
+    name: Use the node network
+    description: "If your server is slow, the answer is requested from a network node. Names, entities and texts are replaced by codes before leaving your home and restored on return."
+  smistatori:
+    name: Relay addresses
+    description: "Servers that connect you with nodes. Leave the default unless you know better."
+  nodo:
+    name: Share your server (node)
+    description: "Off by default. If on, your server answers other users' requests with the local model. They only see codes, never your home."
+  smistatore:
+    name: Act as a relay
+    description: "Only for those with a server reachable from the internet (for example a VPS). Off by default."
+  solo_se_libero:
+    name: Work only when the server is idle
+    description: "If on, the node only accepts jobs when CPU load is below the threshold below."
+  carico_max:
+    name: Maximum load to accept jobs
+    description: "From 0.1 to 1.0. With 0.6 the node refuses jobs if the CPU is above 60%."
+  diretto:
+    name: Direct connection (experimental)
+    description: "Connects your server straight to the node, without the relay. Both sides see each other's IP address. Leave off if unsure."
+  model:
+    name: Local model
+    description: "0.5b is lighter, 1.5b is more accurate. Only downloaded if your server acts as a node or you do not use the network."
+  context:
+    name: Context length
+    description: "How much text the local model can read at once. Leave 2048 unless you have problems."
+  allow_create:
+    name: Allow saving automations
+    description: "Off by default: Yamlic shows the YAML and you copy it. If on, a button saves the automation in one click. Always review the result first."
+  llm_url:
+    name: Model server (optional)
+    description: "Address of your own llama.cpp server, instead of the local model. Leave empty if you do not have one."
+  llm_key:
+    name: Model server key
+    description: "Only needed if the server above requires a key."
+  io_person:
+    name: Your person entity (optional)
+    description: "Pick your person entity, for example person.john, so that \"when I leave\" refers to you."
+network:
+  8099/tcp: Yamlic page
+  8100/tcp: Relay port (only if you enable the relay role)

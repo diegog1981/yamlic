@@ -75,8 +75,8 @@ class Anon:
         if l in GENERIC or len(l) < 3 or l.isdigit() or l in self.tok:
             return
         k = len(self.tok) + 1
-        self.tok[l] = "@A%d" % k
-        self.tok_back["@A%d" % k] = t
+        self.tok[l] = "_A%d" % k
+        self.tok_back["_A%d" % k] = t
 
     def _sub(self, s):
         return TOK.sub(lambda m: self.tok.get(m.group(0).lower(), m.group(0)), s)
@@ -126,12 +126,12 @@ class Anon:
 
     def restore(self, y):
         y = re.sub(r"\b([a-z_]+\.e\d+)\b", lambda m: self.back.get(m.group(1), m.group(1)), y)
-        y = re.sub(r"@A\d+", lambda m: self.tok_back.get(m.group(0), m.group(0)), y)
+        y = re.sub(r"_A\d+", lambda m: self.tok_back.get(m.group(0), m.group(0)), y)
         y = re.sub(r"\$T(\d+)", lambda m: self.texts[int(m.group(1)) - 1] if int(m.group(1)) <= len(self.texts) else m.group(0), y)
         return y
 
     def unresolved(self, y):
-        return sorted(set(re.findall(r"\b[a-z_]+\.e\d+\b", y)) | set(re.findall(r"@A\d+|\$T\d+", y)))
+        return sorted(set(re.findall(r"\b[a-z_]+\.e\d+\b", y)) | set(re.findall(r"_A\d+|\$T\d+", y)))
 
 # ---------- scelta entita ----------
 DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover", "clima": "climate",
