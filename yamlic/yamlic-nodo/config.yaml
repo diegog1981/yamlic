@@ -1,0 +1,23 @@
+name: "Yamlic Nodo"
+version: "0.1.0"
+slug: "yamlic_nodo"
+description: "Metti a disposizione la potenza libera del tuo server per la rete Yamlic. Opzionale. Si collega in uscita, non apre porte."
+url: "https://github.com/diegog1981/yamlic"
+image: "ghcr.io/diegog1981/yamlic-nodo"
+arch:
+  - amd64
+init: false
+startup: application
+boot: manual
+options:
+  broker_url: "https://llm.narriq.app"
+  node_token: ""
+  only_when_idle: true
+  max_load: 0.6
+  threads: 0
+schema:
+  broker_url: "url"
+  node_token: "password"
+  only_when_idle: bool
+  max_load: "float(0.1,1.0)"
+  threads: "int(0,64)"

@@ -1,0 +1,46 @@
+configuration:
+  modo:
+    name: Dove far girare il modello
+    description: "auto = usa il tuo modello se c'è, altrimenti la rete. locale = solo il tuo modello. rete = solo la rete di nodi."
+  usa_rete:
+    name: Usa la rete di nodi
+    description: "Se il tuo server è lento, la risposta viene chiesta a un nodo della rete. Prima di uscire da casa nomi, entità e testi vengono sostituiti da codici e rimessi a posto al ritorno: il nodo non vede la tua casa."
+  smistatori:
+    name: Indirizzi degli smistatori
+    description: "Server che mettono in contatto te con i nodi. Di norma lascia quello predefinito. Puoi aggiungerne altri."
+  nodo:
+    name: Metti a disposizione il tuo server (nodo)
+    description: "Spento di default. Se lo accendi, il tuo server risponde alle richieste di altri utenti con il modello locale. Serve un processore abbastanza potente. Vedono solo codici, mai la casa di chi chiede."
+  smistatore:
+    name: Fai da smistatore
+    description: "Solo per chi ha un server raggiungibile da internet (per esempio una VPS). Spento di default."
+  solo_se_libero:
+    name: Lavora solo quando il server è libero
+    description: "Se acceso, il nodo risponde solo quando il carico del processore è sotto la soglia qui sotto."
+  carico_max:
+    name: Carico massimo per accettare lavori
+    description: "Da 0,1 a 1,0. Con 0,6 il nodo rifiuta lavori se il processore è usato oltre il 60%."
+  diretto:
+    name: Collegamento diretto (sperimentale)
+    description: "Collega direttamente il tuo server al nodo, senza passare dallo smistatore. Attenzione: i due vedono l'indirizzo IP l'uno dell'altro. Lascialo spento se non sai cosa fa."
+  model:
+    name: Modello locale
+    description: "0.5b è più leggero, 1.5b è più preciso. Si scarica solo se il tuo server fa da nodo o se non usi la rete."
+  context:
+    name: Lunghezza del contesto
+    description: "Quanto testo il modello locale può leggere in una volta. Lascia 2048 se non hai problemi."
+  allow_create:
+    name: Consenti di salvare le automazioni
+    description: "Spento di default: Yamlic ti mostra l'YAML e lo copi tu. Se lo accendi, compare il pulsante per salvare l'automazione con un clic. Controlla sempre il risultato prima."
+  llm_url:
+    name: Server del modello (facoltativo)
+    description: "Indirizzo di un tuo server llama.cpp, al posto del modello locale. Lascia vuoto se non ne hai uno."
+  llm_key:
+    name: Chiave del server del modello
+    description: "Serve solo se il server indicato sopra richiede una chiave."
+  io_person:
+    name: La tua persona (facoltativo)
+    description: "Scegli la tua entità persona, per esempio person.mario, così \"esco di casa\" o \"quando arrivo\" si riferisce a te."
+network:
+  8099/tcp: Pagina di Yamlic
+  8100/tcp: Porta dello smistatore (solo se attivi il ruolo smistatore)

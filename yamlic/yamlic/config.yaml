@@ -1,0 +1,49 @@
+name: "Yamlic"
+version: "0.2.2"
+slug: "yamlic"
+description: "Yaml Intelligent Creator: scrivi cosa vuoi in italiano, Yamlic scrive l'automazione per Home Assistant. Ogni installazione puo anche essere nodo o smistatore della rete."
+url: "https://github.com/diegog1981/yamlic"
+image: "ghcr.io/diegog1981/yamlic"
+arch:
+  - amd64
+init: false
+startup: application
+boot: manual
+homeassistant_api: true
+ports:
+  8099/tcp: 8099
+  8100/tcp: null
+ports_description:
+  8099/tcp: "Pagina di Yamlic"
+  8100/tcp: "Porta dello smistatore (solo se attivi il ruolo smistatore)"
+options:
+  modo: "auto"
+  usa_rete: true
+  smistatori:
+    - "wss://llm.narriq.app/ws"
+  nodo: false
+  smistatore: false
+  solo_se_libero: true
+  carico_max: 0.6
+  diretto: false
+  model: "1.5b"
+  context: 2048
+  allow_create: false
+  llm_url: ""
+  llm_key: ""
+  io_person: ""
+schema:
+  modo: "list(auto|locale|rete)"
+  usa_rete: bool
+  smistatori: ["str"]
+  nodo: bool
+  smistatore: bool
+  solo_se_libero: bool
+  carico_max: "float(0.1,1.0)"
+  diretto: bool
+  model: "list(0.5b|1.5b)"
+  context: "int(1024,8192)"
+  allow_create: bool
+  llm_url: "str?"
+  llm_key: "password?"
+  io_person: "str?"
