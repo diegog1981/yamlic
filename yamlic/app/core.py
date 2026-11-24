@@ -245,7 +245,11 @@ def ambiguity(states, prompt, io_person=""):
             hit = [o for o in lightlike if any(x in o["t"] for x in syn)]
             if len(syn) > 1 or len(hit):
                 if hit:
-                    return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d luci. Quali includo?" % (w, len(hit)), "opzioni": opts(hit)}
+                    cov = []
+                    if re.search(r"tapparell|\btend|serrand", low):
+                        cov = [{"id": c["entity_id"], "nome": _nm(c), "gruppo": "cover"} for c in states
+                               if _dom(c["entity_id"]) == "cover" and any(x in (c["entity_id"] + " " + _nm(c)).lower().replace("_", " ") for x in syn)]
+                    return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d luci%s. Quali includo?" % (w, len(hit), (" e %d tende o tapparelle" % len(cov)) if cov else ""), "opzioni": opts(hit) + cov}
         nl = sum(o["gruppo"] == "light" for o in lightlike); ns = len(lightlike) - nl
         if ns:
             return {"tipo": "multi", "testo": "Ho trovato %d %s e %d %s che sembrano luci. Quali includo?" % (nl, "luce" if nl == 1 else "luci", ns, "interruttore" if ns == 1 else "interruttori"),
@@ -353,12 +357,32 @@ def force_targets(y, scelte, prompt=""):
                 done = True
             continue
         out.append(a)
+    cov = [e for e in scelte if e.startswith("cover.")]
+    if cov:
+        o2, fatto = [], False
+        for a in out:
+            svc = str(a.get("action", "")) if isinstance(a, dict) else ""
+            if svc.startswith("cover."):
+                if not fatto:
+                    b = {k: val for k, val in a.items() if k not in ("target", "entity_id")}
+                    b["target"] = {"entity_id": cov}
+                    o2.append(b); fatto = True
+                continue
+            o2.append(a)
+        out = o2
+    if re.search(r"solo se (?:\u00e8 |e |fa )?buio|quando (?:\u00e8 |e |fa )?buio|di notte|dopo il tramonto|se (?:\u00e8 |e )?notte|al buio", prompt.lower()):
+        out = [a for a in out if not (isinstance(a, dict) and "if" in a and "sun" in str(a.get("if")))]
+        cfg["conditions"] = [{"condition": "or", "conditions": [{"condition": "sun", "after": "sunset"}, {"condition": "sun", "before": "sunrise"}]}]
     cfg["actions"] = out
     if prompt and not TRIGGER_CUE.search(prompt.lower()):
         cfg["triggers"] = [{"trigger": "event", "event_type": "yamlic_manuale"}]
         cfg["conditions"] = []
     if prompt:
-        cfg["alias"] = prompt.strip().rstrip(".")[:1].upper() + prompt.strip().rstrip(".")[1:60]
+        al = prompt.strip().rstrip(".")
+        al = al[:1].upper() + al[1:]
+        if len(al) > 60:
+            al = al[:60].rsplit(" ", 1)[0] + "\u2026"
+        cfg["alias"] = al
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
 
 def clean(y, known):
