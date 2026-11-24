@@ -139,7 +139,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.0"
+VERSIONE = "0.3.1"
 _RETE = {"t": 0, "v": None}
 
 
@@ -209,6 +209,7 @@ def generate(prompt, scelte=None, persona="", salta=False):
     if res is None:
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
     y, tolte = core.clean(y, known)
+    y = core.force_targets(y, scelte or [], prompt)
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))

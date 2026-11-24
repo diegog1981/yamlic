@@ -140,6 +140,18 @@ DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover
 
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
+# entita che non sono luci vere: opzioni, indicatori, schermi
+NOT_LIGHT = re.compile(r"update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
+ROOMS = [{"soggiorno", "salotto", "living", "sala", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
+
+def room_words(w):
+    for g in ROOMS:
+        if w in g:
+            return g
+    return {w}
+
+def is_light_like(eid, text):
+    return not NOT_LIGHT.search(text) and (_dom(eid) == "light" or (_dom(eid) == "switch" and bool(LIGHT_LIKE.search(text))))
 
 def select_entities(states, prompt, io_person="", limit=15, only=None):
     """Sceglie le entita da mostrare al modello. Le persone solo se nominate (o 'io'): per 'esco/rientro'
@@ -160,7 +172,7 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
             if named or (io_person == eid and FIRST.search(low)):
                 persons.append((eid, name))
             continue
-        light_like = "light" in wanted and _dom(eid) == "switch" and bool(LIGHT_LIKE.search(text))
+        light_like = "light" in wanted and _dom(eid) == "switch" and bool(LIGHT_LIKE.search(text)) and not NOT_LIGHT.search(text)
         bonus = 3 if (_dom(eid) in wanted or light_like) else 0
         scored.append((sum(w in text for w in words) + bonus, eid, name, light_like))
     if wanted:
@@ -220,12 +232,20 @@ def ambiguity(states, prompt, io_person=""):
     for s in states:
         eid = s["entity_id"]
         text = (eid + " " + _nm(s)).lower().replace("_", " ")
-        if _dom(eid) == "light" or (_dom(eid) == "switch" and LIGHT_LIKE.search(text)):
+        if is_light_like(eid, text):
             lightlike.append({"id": eid, "nome": _nm(s), "gruppo": _dom(eid), "t": text})
     lightlike.sort(key=lambda o: (o["gruppo"] != "light", o["nome"].lower()))
     opts = lambda l: [{k: v for k, v in o.items() if k != "t"} for o in l]
     # A: "tutte le luci" e in casa ci sono anche interruttori che sembrano luci
     if ALL_LIGHTS.search(low):
+        for w in re.findall(r"[a-z\u00e0-\u00ff]{4,}", low):
+            if w in GENERIC or w in STOP:
+                continue
+            syn = room_words(w)
+            hit = [o for o in lightlike if any(x in o["t"] for x in syn)]
+            if len(syn) > 1 or len(hit):
+                if hit:
+                    return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d luci. Quali includo?" % (w, len(hit)), "opzioni": opts(hit)}
         nl = sum(o["gruppo"] == "light" for o in lightlike); ns = len(lightlike) - nl
         if ns:
             return {"tipo": "multi", "testo": "Ho trovato %d %s e %d %s che sembrano luci. Quali includo?" % (nl, "luce" if nl == 1 else "luci", ns, "interruttore" if ns == 1 else "interruttori"),
@@ -243,7 +263,8 @@ def ambiguity(states, prompt, io_person=""):
         pool = lightlike if "light" in wanted else [
             {"id": s["entity_id"], "nome": _nm(s), "gruppo": "cover", "t": (s["entity_id"] + " " + _nm(s)).lower().replace("_", " ")}
             for s in states if "cover" in wanted and _dom(s["entity_id"]) == "cover"]
-        hit = [o for o in pool if w in o["t"]]
+        syn = room_words(w)
+        hit = [o for o in pool if any(x in o["t"] for x in syn)]
         if 3 <= len(hit) <= 15:
             return {"tipo": "multi", "testo": "Per \u00ab%s\u00bb ci sono %d entit\u00e0. Quali includo?" % (w, len(hit)), "opzioni": opts(hit)}
     return None
@@ -275,6 +296,47 @@ def fix_domains(y):
     if not changed:
         return y
     cfg["actions"] = out
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|tramonto|alba|\bsera\b|mattina|notte|minut|\bore\b|esco|esce|rientr|arriv|uscit|movimento|\bapr|chiud|premo|premuto|pulsante|temperatura|umidit|piove|pioggia|\bsole\b")
+
+def force_targets(y, scelte, prompt=""):
+    """Dopo una domanda di chiarimento: nelle azioni luce/interruttore mette esattamente le entita scelte
+    (luci e interruttori separati), senza fidarsi dell'elenco scritto dal modello. Poi pulisce alias e trigger."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    verbo = None
+    out, done = [], False
+    for a in cfg["actions"]:
+        svc = str(a.get("action", "")) if isinstance(a, dict) else ""
+        if scelte and svc.split(".")[0] in ("light", "switch") and svc.split(".", 1)[-1] in {"turn_on", "turn_off", "toggle"}:
+            if not done:
+                v = svc.split(".", 1)[1]
+                lp = prompt.lower()
+                if re.search(r"spegn|spenga|spent", lp) and not re.search(r"accend|accens", lp):
+                    v = "turn_off"
+                elif re.search(r"accend|accens", lp) and not re.search(r"spegn|spenga|spent", lp):
+                    v = "turn_on"
+                base = {k: val for k, val in a.items() if k not in ("target", "entity_id", "action")}
+                li = [e for e in scelte if e.startswith("light.")]
+                sw = [e for e in scelte if e.startswith("switch.")]
+                if li:
+                    out.append({"action": "light." + v, **base, "target": {"entity_id": li}})
+                if sw:
+                    out.append({"action": "switch." + v, **{k: val for k, val in base.items() if k not in ("data",)}, "target": {"entity_id": sw}})
+                done = True
+            continue
+        out.append(a)
+    cfg["actions"] = out
+    if prompt and not TRIGGER_CUE.search(prompt.lower()):
+        cfg["triggers"] = [{"trigger": "event", "event_type": "yamlic_manuale"}]
+        cfg["conditions"] = []
+    if prompt:
+        cfg["alias"] = prompt.strip().rstrip(".")[:1].upper() + prompt.strip().rstrip(".")[1:60]
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
 
 def clean(y, known):
