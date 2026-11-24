@@ -139,7 +139,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.2"
+VERSIONE = "0.3.3"
 _RETE = {"t": 0, "v": None}
 
 
