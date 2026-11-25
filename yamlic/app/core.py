@@ -451,6 +451,8 @@ def rules(cfg, prompt):
     # condizioni su select/number/text mai citati nel prompt: inventate
     def citata(c):
         e = str(c.get("entity_id", "")) if isinstance(c, dict) else ""
+        if e.startswith("zone.") and not re.search(r"casa|nessuno|qualcuno|presen|fuori|usciti|rientr", lp):
+            return False
         if e.split(".")[0] not in ("select", "number", "text", "input_select", "input_text"):
             return True
         return any(len(w) > 3 and w not in ("casa", "home", "smart", "sensor", "stato") and w in lp for w in e.split(".", 1)[1].split("_"))
@@ -654,8 +656,6 @@ DURATA = re.compile(r"minut|second|\bor[ae]\b|dopo|poi\b|per \d|temporizz|timer|
 
 def via_pausa(y, prompt):
     """Il modello a volte aggiunge 'delay + azione' non richiesti: se il prompt non parla di durata li toglie."""
-    if DURATA.search(prompt.lower()):
-        return y
     try:
         cfg = yaml.safe_load(y)
     except Exception:
@@ -663,11 +663,18 @@ def via_pausa(y, prompt):
     acts = cfg.get("actions") if isinstance(cfg, dict) else None
     if not isinstance(acts, list):
         return y
+    n0 = len(acts)
+    dedup = [a for i, a in enumerate(acts) if not (i > 0 and a == acts[i - 1] and isinstance(a, dict) and "action" in a)]
+    if len(dedup) != len(acts):
+        cfg["actions"] = acts = dedup
+    dump = lambda: yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+    if DURATA.search(prompt.lower()):
+        return dump() if len(dedup) != n0 else y
     for i, a in enumerate(acts):
         if i > 0 and isinstance(a, dict) and "delay" in a and all(isinstance(b, dict) and str(b.get("action", "")).split(".", 1)[0] in ("light", "switch") for b in acts[i + 1:]):
             del acts[i:]
-            return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
-    return y
+            return dump()
+    return dump() if len(dedup) != n0 else y
 
 def impulsi(y):
     """Cancelli/garage su switch sono quasi sempre a impulso: un solo turn_on. Ritorna (yaml, avvisi)."""
