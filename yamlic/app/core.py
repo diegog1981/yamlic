@@ -340,6 +340,16 @@ def unknown_entities(y, known):
 TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|tramonto|alba|\bsera\b|mattina|notte|minut|\bore\b|esco|esce|rientr|arriv|uscit|movimento|premo|premuto|pulsante|temperatura|umidit|piove|pioggia|\bsole\b")
 
 COND_CUE = re.compile(r"solo se|soltanto|purche|purché|se non|solo quando|solo di|buio|notte|tramonto|alba|sole|presente|nessuno|qualcuno|feriali|lavorativ|weekend|fine settimana|sabato|domenica|luned|marted|mercoled|gioved|venerd|a casa|in casa|fuori casa|\\bse\\b")
+COLORI = {"rosso": (255, 0, 0), "verde": (0, 255, 0), "blu": (0, 0, 255), "azzurro": (0, 160, 255), "celeste": (0, 160, 255),
+          "giallo": (255, 220, 0), "arancione": (255, 120, 0), "viola": (150, 0, 255), "rosa": (255, 90, 180)}
+STANZE_EXTRA = ("ingresso", "corridoio", "studio", "ripostiglio", "cantina", "garage", "terrazzo", "balcone", "lavanderia", "mansarda", "taverna", "soffitta", "cameretta")
+
+def stanze_mancanti(states, prompt):
+    """Stanze nominate nel prompt che non compaiono in nessuna entita ne area di casa."""
+    low = prompt.lower()
+    tutto = " ".join(_t(s) for s in states)
+    return [w for w in STANZE_EXTRA if re.search(r"\b%s" % w, low) and w not in tutto]
+
 DAYS = {"luned":"mon","marted":"tue","mercoled":"wed","gioved":"thu","venerd":"fri","sabato":"sat","domenica":"sun"}
 
 def rules(cfg, prompt):
@@ -352,6 +362,16 @@ def rules(cfg, prompt):
                 a["data"].pop("brightness_pct", None); a["data"].pop("brightness", None)
                 if not a["data"]:
                     a.pop("data")
+    # colore detto a parole -> rgb_color (via color_temp inventata)
+    for nome, rgb in COLORI.items():
+        if re.search(r"\b%s\b" % nome, lp):
+            for a in cfg.get("actions") or []:
+                if isinstance(a, dict) and str(a.get("action", "")) == "light.turn_on":
+                    d = a.setdefault("data", {}) if isinstance(a.get("data", {}), dict) else {}
+                    for k in ("color_temp", "color_temp_kelvin", "kelvin", "color_name", "rgb_color", "xy_color", "hs_color"):
+                        d.pop(k, None)
+                    d["rgb_color"] = list(rgb); a["data"] = d
+            break
     # servizi media.* -> media_player.*
     for a in cfg.get("actions") or []:
         if isinstance(a, dict) and str(a.get("action", "")).startswith("media."):
@@ -365,6 +385,9 @@ def rules(cfg, prompt):
         trig = [{"trigger": "sun", "event": ev}]
         cfg["triggers"] = trig
     # orario esplicito
+    lp = re.sub(r"\balle (\d{1,2}) e mezz[oa]\b", r"alle \1:30", lp)
+    lp = re.sub(r"\balle (\d{1,2}) e un quarto\b", r"alle \1:15", lp)
+    lp = re.sub(r"\balle (\d{1,2}) e (\d{1,2})\b(?! ?(?:ore|ora)\b)", lambda m: "alle %s:%02d" % (m[1], int(m[2])) if int(m[2]) < 60 else m[0], lp)
     horas = re.findall(r"\balle (\d{1,2})(?:[:.](\d{2}))?", lp)
     attime = [t for t in trig if t.get("trigger") == "time"]
     if len(horas) == 1 and len(attime) == 1:
