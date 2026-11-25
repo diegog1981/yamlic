@@ -110,8 +110,9 @@ class Anon:
             obj = eid.split(".", 1)[1].lower()
             if eid.lower() in t or (obj in words and not all(x in GENERIC for x in obj.split("_"))):
                 bad.append(eid)
+        senza_dom = re.sub(r"\b[a-z_]+\.(e\d+|[a-z0-9_]+)", r" \1", text)
         for w in self.tok:
-            if w in {x.lower() for x in TOK.findall(text)}:
+            if w in {x.lower() for x in TOK.findall(senza_dom)}:
                 bad.append(w)
         for q in self.texts:
             if q.lower() in t:
@@ -177,7 +178,7 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
                 persons.append((eid, name))
             continue
         arw = (s.get("attributes") or {}).get("_area", "").lower()
-        in_room = bool(arw) and any(len(w) > 3 and room_words(w) and w in arw or (len(w) > 3 and arw in low) for w in words)
+        in_room = bool(arw) and any(len(w) > 3 and any(x in arw for x in room_words(w)) for w in words)
         light_like = "light" in wanted and _dom(eid) == "switch" and (bool(LIGHT_LIKE.search(text)) or in_room) and not NOT_LIGHT.search(text)
         bonus = 3 if (_dom(eid) in wanted or light_like) else 0
         scored.append((sum(w in text for w in words) + bonus, eid, name, light_like))
@@ -403,9 +404,60 @@ def rules(cfg, prompt):
     cfg["conditions"] = conds
     return cfg
 
-def force_targets(y, scelte, prompt=""):
+def repair(y, known, prompt=""):
+    """Ripara id inventati dal modello: media.player.x, persone inesistenti, entita simili o uniche del dominio."""
+    import difflib
+    y = re.sub(r"\bmedia\.player\.", "media_player.", y)
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not known:
+        return y
+    lp = prompt.lower()
+    uscita = bool(re.search(r"esco|esce|uscit|nessuno|tutti .*(usciti|fuori)|casa vuota", lp))
+    ritorno = bool(re.search(r"arriv|torn|rientr", lp))
+    trig = []
+    for t in cfg.get("triggers") or []:
+        e = t.get("entity_id") if isinstance(t, dict) else None
+        if isinstance(e, str) and e.startswith("person.") and e not in known and "zone.home" in known:
+            if uscita or ritorno:
+                t = {"trigger": "numeric_state", "entity_id": "zone.home", **({"below": 1} if uscita else {"above": 0})}
+        trig.append(t)
+    if trig:
+        cfg["triggers"] = trig
+    def fix(e):
+        m = re.fullmatch(r"([a-z_]+)\.([A-Za-z0-9_]+)", e) if isinstance(e, str) else None
+        if not m or e in known or m[1] == "person":
+            return e
+        cand = [k for k in known if k.split(".")[0] == m[1]]
+        if not cand:
+            return e
+        if len(cand) == 1 and m[1] in ("lock", "weather", "alarm_control_panel"):
+            return cand[0]
+        parole = [w for w in m[2].split("_") if len(w) > 2 and not re.fullmatch(r"e\d+", w)]
+        best = max(cand, key=lambda k: (sum(w in k for w in parole), difflib.SequenceMatcher(None, m[2], k.split(".", 1)[1]).ratio()))
+        if sum(w in best for w in parole) >= 1 and m[1] in ("light", "switch", "cover", "media_player", "lock"):
+            return best
+        return e
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == "entity_id":
+                    x[k] = [fix(i) for i in v] if isinstance(v, list) else fix(v)
+                else:
+                    walk(v)
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+    walk(cfg)
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+def force_targets(y, scelte, prompt="", known=None):
     """Dopo una domanda di chiarimento: nelle azioni luce/interruttore mette esattamente le entita scelte
     (luci e interruttori separati), senza fidarsi dell'elenco scritto dal modello. Poi pulisce alias e trigger."""
+    if known:
+        y = repair(y, known, prompt)
     try:
         cfg = yaml.safe_load(y)
     except Exception:
