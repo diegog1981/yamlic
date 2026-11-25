@@ -429,6 +429,37 @@ def rules(cfg, prompt):
     cfg["conditions"] = conds
     return cfg
 
+def nome_esatto(y, states, prompt):
+    """Se una parola del prompt coincide col nome esatto di un solo interruttore/luce e il modello ha scelto altro, usa quello."""
+    low = prompt.lower()
+    if not re.search(r"luc|lamp|farett|accend|spegn", low):
+        return y
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    words = [w for w in re.findall(r"[a-z\u00e0-\u00ff]{5,}", low) if w not in GENERIC and w not in STOP]
+    by = {s_["entity_id"]: s_ for s_ in states}
+    changed = False
+    for w in words:
+        hit = [s_ for s_ in states if _dom(s_["entity_id"]) in ("switch", "light") and (s_.get("attributes") or {}).get("friendly_name", "").strip().lower() == w and not NOT_LIGHT.search(_t(s_))]
+        if len(hit) != 1:
+            continue
+        eid = hit[0]["entity_id"]
+        for a in cfg["actions"]:
+            if not isinstance(a, dict) or not str(a.get("action", "")).startswith(("light.turn_", "switch.turn_")):
+                continue
+            tg = (a.get("target") or {}).get("entity_id")
+            ids = tg if isinstance(tg, list) else [tg] if tg else []
+            if eid in ids or any(w in _t(by[i]) for i in ids if i in by):
+                continue
+            a["action"] = _dom(eid) + "." + a["action"].split(".", 1)[1]
+            a["target"] = {"entity_id": [eid]}
+            changed = True
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n") if changed else y
+
 def repair(y, known, prompt=""):
     """Ripara id inventati dal modello: media.player.x, persone inesistenti, entita simili o uniche del dominio."""
     import difflib
