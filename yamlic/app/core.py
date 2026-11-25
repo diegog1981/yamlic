@@ -33,6 +33,8 @@ temperatura umidita umidità clima condizionatore presa prese ventola tv telefon
 ospiti sensore interruttore switch light cover sensor climate person notify zone sun lock fan media player input boolean
 binary script automazione stato batteria energia potenza consumo""".split())
 TOK = re.compile(r"[A-Za-zÀ-ÿ0-9]+")
+SAFE = set("update home assist satellite assistant voice status ring display screen sun zone mode night enabled reset restart identify mute sound debug kiosk".split())
+SYSWORDS = {w.lower() for w in re.findall(r"[A-Za-zÀ-ÿ0-9]+", SYSTEM)} | SAFE
 QUOTED = re.compile(r'"([^"\n]{1,200})"|«([^»\n]{1,200})»')
 
 def _dom(eid):
@@ -72,7 +74,7 @@ class Anon:
 
     def _add_tok(self, t):
         l = t.lower()
-        if l in GENERIC or len(l) < 3 or l.isdigit() or l in self.tok:
+        if l in GENERIC or l in SYSWORDS or len(l) < 3 or l.isdigit() or l in self.tok:
             return
         k = len(self.tok) + 1
         self.tok[l] = "_A%d" % k
@@ -141,7 +143,7 @@ DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 # entita che non sono luci vere: opzioni, indicatori, schermi
-NOT_LIGHT = re.compile(r"update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
+NOT_LIGHT = re.compile(r"cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
 ROOMS = [{"soggiorno", "salotto", "living", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
 
 def room_words(w):
@@ -166,6 +168,8 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
         eid = s["entity_id"]
         name = (s.get("attributes") or {}).get("friendly_name", "")
         text = _t(s)
+        if _dom(eid) in ("light", "switch") and NOT_LIGHT.search(text) and not any(m.group(0) in low for m in NOT_LIGHT.finditer(text)):
+            continue
         if _dom(eid) == "person":
             obj = eid.split(".", 1)[1].lower().replace("_", " ")
             named = any(t in words for t in re.findall(r"\w{3,}", (obj + " " + name.lower()))) 
@@ -329,7 +333,73 @@ def unknown_entities(y, known):
     walk(cfg)
     return sorted(set(bad))
 
-TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|tramonto|alba|\bsera\b|mattina|notte|minut|\bore\b|esco|esce|rientr|arriv|uscit|movimento|\bapr|chiud|premo|premuto|pulsante|temperatura|umidit|piove|pioggia|\bsole\b")
+TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|tramonto|alba|\bsera\b|mattina|notte|minut|\bore\b|esco|esce|rientr|arriv|uscit|movimento|premo|premuto|pulsante|temperatura|umidit|piove|pioggia|\bsole\b")
+
+COND_CUE = re.compile(r"solo se|soltanto|purche|purché|se non|solo quando|solo di|buio|notte|tramonto|alba|sole|presente|nessuno|qualcuno|feriali|lavorativ|weekend|fine settimana|sabato|domenica|luned|marted|mercoled|gioved|venerd|a casa|in casa|fuori casa|\\bse\\b")
+DAYS = {"luned":"mon","marted":"tue","mercoled":"wed","gioved":"thu","venerd":"fri","sabato":"sat","domenica":"sun"}
+
+def rules(cfg, prompt):
+    """Regole deterministiche applicate dopo il modello: tolgono invenzioni e correggono cio che il prompt dice chiaramente."""
+    lp = prompt.lower()
+    # niente luminosita inventata
+    if not re.search(r"%|percent|luminos|intensit|dimm|al \d+|soft|tenue", lp):
+        for a in cfg.get("actions") or []:
+            if isinstance(a, dict) and isinstance(a.get("data"), dict):
+                a["data"].pop("brightness_pct", None); a["data"].pop("brightness", None)
+                if not a["data"]:
+                    a.pop("data")
+    # servizi media.* -> media_player.*
+    for a in cfg.get("actions") or []:
+        if isinstance(a, dict) and str(a.get("action", "")).startswith("media."):
+            a["action"] = "media_player." + a["action"].split(".", 1)[1]
+    trig = [t for t in (cfg.get("triggers") or []) if isinstance(t, dict)]
+    # tramonto / alba
+    ev = None
+    if re.search(r"al tramonto|quando tramonta|all.?imbrunire", lp): ev = "sunset"
+    elif re.search(r"all.?alba|al sorgere|quando sorge", lp): ev = "sunrise"
+    if ev and not any(t.get("trigger") == "sun" for t in trig):
+        trig = [{"trigger": "sun", "event": ev}]
+        cfg["triggers"] = trig
+    # orario esplicito
+    horas = re.findall(r"\balle (\d{1,2})(?:[:.](\d{2}))?", lp)
+    attime = [t for t in trig if t.get("trigger") == "time"]
+    if len(horas) == 1 and len(attime) == 1:
+        h, m = int(horas[0][0]), int(horas[0][1] or 0)
+        if h < 12 and re.search(r"di sera|pomeriggio|di pomeriggio|stasera", lp): h += 12
+        if h < 24 and m < 60:
+            attime[0]["at"] = "%02d:%02d:00" % (h, m)
+    # presenza
+    if re.search(r"nessuno (e |è )?(in|a) casa|tutti (sono )?(usciti|fuori)|casa vuota|non c.?e nessuno", lp):
+        cond = {"trigger": "numeric_state", "entity_id": "zone.home", "below": 1}
+        cfg["triggers"] = [cond]
+    # confronti numerici
+    for t in trig:
+        if t.get("trigger") == "numeric_state":
+            if re.search(r"sotto|scend|meno di|inferiore|cala", lp) and "above" in t and "below" not in t:
+                t["below"] = t.pop("above")
+            elif re.search(r"sopra|sal[ei]|piu di|più di|superiore|supera", lp) and "below" in t and "above" not in t:
+                t["above"] = t.pop("below")
+        if str(t.get("entity_id", "")).startswith("weather.") and re.search(r"piove|pioggia", lp):
+            t["trigger"] = "state"; t["to"] = "rainy"; t.pop("above", None); t.pop("below", None)
+    # giorni della settimana
+    wd = None
+    if re.search(r"feriali|lavorativ|dal luned. al venerd.", lp): wd = ["mon", "tue", "wed", "thu", "fri"]
+    elif re.search(r"weekend|fine settimana|nel fine", lp): wd = ["sat", "sun"]
+    else:
+        f = [v for k, v in DAYS.items() if k in lp]
+        if f: wd = f
+    conds = [c for c in (cfg.get("conditions") or []) if isinstance(c, dict)]
+    if wd:
+        conds = [c for c in conds if c.get("condition") != "time" or "weekday" not in c]
+        conds.append({"condition": "time", "weekday": wd})
+    # condizioni inventate: via se il prompt non le chiede
+    if not COND_CUE.search(lp):
+        conds = []
+    # qualcuno a casa
+    if re.search(r"se c.?e qualcuno|qualcuno (e |è )?(a|in) casa|solo se (siamo|sono) (a|in) casa", lp) and not any("zone.home" in str(c) for c in conds):
+        conds.append({"condition": "numeric_state", "entity_id": "zone.home", "above": 0})
+    cfg["conditions"] = conds
+    return cfg
 
 def force_targets(y, scelte, prompt=""):
     """Dopo una domanda di chiarimento: nelle azioni luce/interruttore mette esattamente le entita scelte
@@ -379,12 +449,14 @@ def force_targets(y, scelte, prompt=""):
         out = [a for a in out if not (isinstance(a, dict) and "if" in a and "sun" in str(a.get("if")))]
         cfg["conditions"] = [{"condition": "or", "conditions": [{"condition": "sun", "after": "sunset"}, {"condition": "sun", "before": "sunrise"}]}]
     cfg["actions"] = out
+    if prompt:
+        cfg = rules(cfg, prompt)
     for t in cfg.get("triggers") or []:
         if isinstance(t, dict) and isinstance(t.get("at"), str):
             m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", t["at"].strip())
             if m:
                 t["at"] = "%02d:%s:%s" % (int(m.group(1)), m.group(2), m.group(3) or "00")
-    if prompt and not TRIGGER_CUE.search(prompt.lower()):
+    if prompt and not TRIGGER_CUE.search(re.sub(r"(dopo|tra|fra) \d+ \w+", "", prompt.lower())):
         cfg["triggers"] = [{"trigger": "event", "event_type": "yamlic_manuale"}]
         cfg["conditions"] = []
     if prompt:
