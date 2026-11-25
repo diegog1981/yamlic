@@ -435,9 +435,11 @@ def repair(y, known, prompt=""):
             return e
         if len(cand) == 1 and m[1] in ("lock", "weather", "alarm_control_panel"):
             return cand[0]
-        parole = [w for w in m[2].split("_") if len(w) > 2 and not re.fullmatch(r"e\d+", w)]
-        best = max(cand, key=lambda k: (sum(w in k for w in parole), difflib.SequenceMatcher(None, m[2], k.split(".", 1)[1]).ratio()))
-        if sum(w in best for w in parole) >= 1 and m[1] in ("light", "switch", "cover", "media_player", "lock"):
+        parole = [w.lower() for w in m[2].split("_") if len(w) > 1 and not re.fullmatch(r"e\d+", w)]
+        pp = [w for w in parole if w in lp]
+        base = pp or parole
+        best = max(cand, key=lambda k: (sum(w in k for w in base), difflib.SequenceMatcher(None, m[2].lower(), k.split(".", 1)[1]).ratio()))
+        if sum(w in best for w in base) >= 1 and m[1] in ("light", "switch", "cover", "media_player", "lock"):
             return best
         return e
     def walk(x):
@@ -452,6 +454,27 @@ def repair(y, known, prompt=""):
                 walk(i)
     walk(cfg)
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+IMPULSO = re.compile(r"cancell|portone|garage|basculante")
+
+def impulsi(y):
+    """Cancelli/garage su switch sono quasi sempre a impulso: un solo turn_on. Ritorna (yaml, avvisi)."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y, []
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y, []
+    avv = []
+    for a in cfg["actions"]:
+        if not isinstance(a, dict) or not str(a.get("action", "")).startswith("switch."):
+            continue
+        ents = _target_ents(a)
+        if ents and all(IMPULSO.search(e.lower()) for e in ents):
+            if a["action"] != "switch.turn_on":
+                a["action"] = "switch.turn_on"
+            avv.append("cancello/garage a impulso: invia un solo impulso, non sa se e aperto o chiuso (controlla con un sensore di stato)")
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n"), sorted(set(avv))
 
 def force_targets(y, scelte, prompt="", known=None):
     """Dopo una domanda di chiarimento: nelle azioni luce/interruttore mette esattamente le entita scelte

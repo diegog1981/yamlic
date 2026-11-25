@@ -162,7 +162,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.11"
+VERSIONE = "0.3.12"
 _RETE = {"t": 0, "v": None}
 
 
@@ -189,9 +189,9 @@ def rete_info():
 
 
 # ---------- cliente ----------
-def generate(prompt, scelte=None, persona="", salta=False):
-    states = ha("/states")
-    ar = aree()
+def generate(prompt, scelte=None, persona="", salta=False, stati=None):
+    states = stati if isinstance(stati, list) and stati else ha("/states")   # stati: solo per le prove con case finte
+    ar = {} if stati else aree()
     for st_ in states:
         if st_["entity_id"] in ar:
             st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
@@ -237,9 +237,11 @@ def generate(prompt, scelte=None, persona="", salta=False):
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
     y, tolte = core.clean(y, known)
     y = core.force_targets(y, scelte or [], prompt, known)
+    y, avvisi = core.impulsi(y)
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
+    problems += avvisi
     ignote = core.unknown_entities(y, known)
     if ignote:
         problems.append("entita che non esistono in casa, da correggere a mano: " + ", ".join(ignote))
@@ -281,7 +283,7 @@ class H(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(n) or b"{}")
             if self.path.endswith("/api/generate"):
-                self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta"))))
+                self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati")))
             elif self.path.endswith("/api/create"):
                 code, res = create(data.get("yaml", ""))
                 self._send(code, res)
