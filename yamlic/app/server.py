@@ -166,7 +166,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.25"
+VERSIONE = "0.3.26"
 _RETE = {"t": 0, "v": None}
 
 

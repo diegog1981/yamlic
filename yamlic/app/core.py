@@ -389,6 +389,13 @@ def rules(cfg, prompt):
                         d.pop(k, None)
                     d["rgb_color"] = list(rgb); a["data"] = d
             break
+    # aspirapolvere: pausa / ritorno alla base
+    for a in cfg.get("actions") or []:
+        if isinstance(a, dict) and str(a.get("action", "")).startswith("vacuum."):
+            if re.search(r"pausa|metti in pausa|sospendi|ferma temporaneamente", lp): a["action"] = "vacuum.pause"
+            elif re.search(r"torna.* base|alla base|ricarica", lp): a["action"] = "vacuum.return_to_base"
+            elif re.search(r"\bavvia|\bparti|inizia.*puli|\bpulisci|accendi", lp): a["action"] = "vacuum.start"
+            elif re.search(r"\bferma|\bstop|spegni", lp): a["action"] = "vacuum.stop"
     # servizi media.* -> media_player.*
     for a in cfg.get("actions") or []:
         if isinstance(a, dict) and str(a.get("action", "")).startswith("media."):
@@ -848,7 +855,8 @@ SERVICES = {
     "cover": {"open_cover", "close_cover", "stop_cover", "set_cover_position", "toggle"},
     "climate": {"set_hvac_mode", "set_temperature", "turn_on", "turn_off"},
     "lock": {"lock", "unlock"}, "fan": {"turn_on", "turn_off", "toggle"},
-    "media_player": {"turn_on", "turn_off", "media_pause", "media_play"},
+    "media_player": {"turn_on", "turn_off", "media_pause", "media_play", "media_stop", "play_media", "volume_set", "volume_mute"},
+    "vacuum": {"start", "pause", "stop", "return_to_base", "locate"}, "tts": None,
     "alarm_control_panel": {"alarm_arm_away", "alarm_arm_home", "alarm_disarm"},
     "input_boolean": {"turn_on", "turn_off", "toggle"}, "scene": {"turn_on"}, "script": {"turn_on"}, "notify": None,
 }
