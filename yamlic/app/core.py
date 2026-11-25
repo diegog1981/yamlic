@@ -416,6 +416,14 @@ def rules(cfg, prompt):
     if re.search(r"nessuno (e |è )?(in|a) casa|tutti (sono )?(usciti|fuori)|casa vuota|non c.?e nessuno", lp):
         cond = {"trigger": "numeric_state", "entity_id": "zone.home", "below": 1}
         cfg["triggers"] = [cond]
+    # zone.home come trigger di stato: va confrontato come numero
+    for t in trig:
+        if t.get("trigger") == "state" and t.get("entity_id") == "zone.home":
+            to = str(t.get("to", ""))
+            if to == "0" or re.search(r"esco|esce|usciti|uscit|nessuno", lp) and not to.isdigit():
+                t.clear(); t.update({"trigger": "numeric_state", "entity_id": "zone.home", "below": 1})
+            elif to.isdigit():
+                t.clear(); t.update({"trigger": "numeric_state", "entity_id": "zone.home", "above": 0})
     # confronti numerici
     for t in trig:
         if t.get("trigger") == "numeric_state":
