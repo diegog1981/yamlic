@@ -498,6 +498,69 @@ def fill_empty(y, states, prompt):
         changed = True
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n") if changed else y
 
+def room_guard(y, states, prompt):
+    """Se la frase nomina UNA stanza e il modello ha scelto entita di un'altra stanza, usa quelle della stanza nominata."""
+    low = prompt.lower()
+    words = set(re.findall(r"\w+", low))
+    groups = [g for g in ROOMS if g & words]
+    if len(groups) != 1:
+        return y
+    G = groups[0]
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    smap = {s_["entity_id"]: s_ for s_ in states}
+    pw = {w for w in re.findall(r"\w{4,}", low) if w not in STOP and w not in GENERIC and w not in G}
+    def inroom(s_):
+        t = _t(s_)
+        return any(w in t for w in G)
+    out, changed = [], False
+    for a in cfg["actions"]:
+        svc = str(a.get("action", "")) if isinstance(a, dict) else ""
+        d, _, verb = svc.partition(".")
+        ents = _target_ents(a) if isinstance(a, dict) else []
+        altre = set().union(*[g for g in ROOMS if g is not G]) if len(ROOMS) > 1 else set()
+        def sbagliata(e):
+            if e not in smap or inroom(smap[e]):
+                return False
+            t = _t(smap[e])
+            return any(w in t for w in altre)
+        if d not in ("light", "switch", "cover") or not ents or not all(sbagliata(e) for e in ents):
+            out.append(a); continue
+        cand = []
+        for s_ in states:
+            eid = s_["entity_id"]
+            if not inroom(s_):
+                continue
+            if d == "cover" and _dom(eid) == "cover":
+                cand.append(s_)
+            elif d in ("light", "switch") and _dom(eid) in ("light", "switch") and (is_light_like(eid, _t(s_)) or (_dom(eid) == "switch" and not NOT_LIGHT.search(_t(s_)) and (s_.get("attributes") or {}).get("_area"))):
+                cand.append(s_)
+        if not cand:
+            out.append(a); continue
+        sc = [(sum(w in _t(s_) for w in pw), s_["entity_id"]) for s_ in cand]
+        top = max(n for n, _ in sc)
+        ids = sorted(e for n, e in sc if n == top)[:6]
+        base = {k: v for k, v in a.items() if k not in ("target", "entity_id", "action")}
+        if d == "cover":
+            out.append({"action": svc, **base, "target": {"entity_id": ids}})
+        else:
+            li = [e for e in ids if e.startswith("light.")]
+            sw = [e for e in ids if e.startswith("switch.")]
+            if li:
+                out.append({"action": "light." + verb, **base, "target": {"entity_id": li}})
+            if sw:
+                out.append({"action": "switch." + verb, **{k: v for k, v in base.items() if k != "data"}, "target": {"entity_id": sw}})
+        changed = True
+    if not changed:
+        return y
+    cfg["actions"] = out
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+
 IMPULSO = re.compile(r"cancell|portone|garage|basculante")
 
 def impulsi(y):
