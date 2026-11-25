@@ -546,6 +546,66 @@ def tranne(y, states, prompt):
     cfg["actions"] = out
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
 
+EN_STOP = set("when if turn turns off the and then that this with from sensor light lights switch plug fan door lock open close closes pause resume every each night evening morning midnight sunset sunrise above below over under climbs drops passes tops gets reads goes trips fires catches sees picks detects movement".split())
+ABOVE = re.compile(r"\b(?:over|above|exceeds?|climbs?(?: over| above)?|tops?|passes|rises?(?: above)?|higher than|more than|sopra|supera|oltre|piu di|pi\u00f9 di)\s+(\d+(?:[.,]\d+)?)")
+BELOW = re.compile(r"\b(?:below|under|drops?(?: below)?|falls?(?: below)?|lower than|less than|sotto|scende(?: sotto)?|meno di)\s+(\d+(?:[.,]\d+)?)")
+
+def _ora(lp):
+    """Ora esplicita dal prompt (inglese o italiano): 'HH:MM:00' oppure None."""
+    if re.search(r"\bmidnight\b|\bmezzanotte\b", lp): return "00:00:00"
+    if re.search(r"\bat noon\b|\bmezzogiorno\b", lp): return "12:00:00"
+    m = re.search(r"\b(?:at|alle)\s+(\d{1,2})(?:[:.](\d{2})| e (\d{1,2})\b)?\s*(am|pm)?", lp)
+    if not m: return None
+    h, mi = int(m.group(1)), int(m.group(2) or m.group(3) or 0)
+    ap = m.group(4)
+    sera = re.search(r"evening|night|tonight|afternoon|di sera|di notte|pomeriggio|stasera", lp)
+    if ap == "pm" and h < 12: h += 12
+    elif ap == "am" and h == 12: h = 0
+    elif not ap and sera:
+        if h < 12 and not (h <= 4 and re.search(r"night|notte", lp) and not re.search(r"evening|di sera", lp)): h += 12
+        elif h == 12 and re.search(r"night|notte", lp): h = 0
+    if h > 23 or mi > 59: return None
+    return "%02d:%02d:00" % (h, mi)
+
+def _overlap(s_, lp):
+    words = {w for w in re.findall(r"[a-z\u00e0-\u00ff]{3,}", lp) if w not in EN_STOP and w not in GENERIC and w not in STOP}
+    return sum(w in _t(s_) for w in words)
+
+def trigger_da_testo(y, states, prompt):
+    """Se il modello ha lasciato il trigger manuale ma il prompt dice quando (orario, alba/tramonto, soglia, sensore), lo costruisce con regole (italiano e inglese)."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict):
+        return y
+    trig = [t for t in (cfg.get("triggers") or []) if isinstance(t, dict)]
+    if trig and not all(t.get("trigger") == "event" and t.get("event_type") == "yamlic_manuale" for t in trig):
+        return y
+    lp = prompt.lower(); new = None
+    if re.search(r"\bsunset\b|\bdusk\b", lp): new = {"trigger": "sun", "event": "sunset"}
+    elif re.search(r"\bsunrise\b|\bdawn\b", lp): new = {"trigger": "sun", "event": "sunrise"}
+    else:
+        m_a, m_b = ABOVE.search(lp), BELOW.search(lp)
+        m = m_a or m_b
+        if m and not re.search(r"\bmin(?:ute|uti)s?\b|\bhours?\b|\bore\b", lp[m.start():m.end() + 12]):
+            cand = sorted(((_overlap(s_, lp), s_["entity_id"]) for s_ in states if _dom(s_["entity_id"]) == "sensor"), reverse=True)
+            if cand and cand[0][0] > 0 and (len(cand) == 1 or cand[0][0] > cand[1][0]):
+                val = float(m.group(1).replace(",", ".")); val = int(val) if val == int(val) else val
+                new = {"trigger": "numeric_state", "entity_id": cand[0][1], ("above" if m_a else "below"): val}
+        if new is None:
+            ora = _ora(lp)
+            if ora:
+                new = {"trigger": "time", "at": ora}
+            elif re.search(r"\b(when|if|quando|se)\b", lp):
+                cand = sorted(((_overlap(s_, lp), s_["entity_id"]) for s_ in states if _dom(s_["entity_id"]) == "binary_sensor"), reverse=True)
+                if cand and cand[0][0] > 0 and (len(cand) == 1 or cand[0][0] > cand[1][0]):
+                    new = {"trigger": "state", "entity_id": cand[0][1], "to": "on"}
+    if not new:
+        return y
+    cfg["triggers"] = [new]
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
 def repair(y, known, prompt=""):
     """Ripara id inventati dal modello: media.player.x, persone inesistenti, entita simili o uniche del dominio."""
     import difflib
