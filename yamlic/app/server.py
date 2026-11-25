@@ -67,8 +67,9 @@ pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overf
 <div id=r class="card hide">
 <div class=chips id=st></div>
 <pre id=y></pre>
-<div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
+<div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=iv class=s>Invia a Diego</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
 <div id=w></div>
+<div id=pv class="warn hide"><b>Cosa arriva a Diego</b> (nomi e testi sono gia sostituiti da codici, la tua casa non si riconosce):<pre id=pt></pre><textarea id=nt rows=2 placeholder="Cosa non va? (facoltativo)"></textarea><div class=row><button id=ok>Invia</button><button id=no class=s>Annulla</button><span id=pm class=mu></span></div></div>
 </div>
 <p class=mu>Controlla sempre l'automazione prima di usarla. Per metterla in Home Assistant: Impostazioni, Automazioni, Crea, Modifica in YAML, incolla.</p>
 </main>
@@ -94,13 +95,16 @@ function stats(j){const s=j.stats||{};const c=[];if(s.secondi!=null)c.push('<spa
  if(s.token_risposta&&s.secondi>0)c.push('<span class=chip><b>'+Math.round(s.token_risposta/s.secondi)+'</b> token/s</span>');
  $('st').innerHTML=c.join('')}
 function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.remove('hide');
- if(j.error){$('y').textContent='';$('st').innerHTML='';$('cp').classList.add('hide');$('cs').classList.add('hide');$('sv').classList.add('hide');
+ if(j.error){$('y').textContent='';$('st').innerHTML='';$('cp').classList.add('hide');$('cs').classList.add('hide');$('iv').classList.add('hide');$('sv').classList.add('hide');
   $('w').innerHTML='<div class="warn err">'+esc(j.error)+(j.problems?' ('+esc(j.problems.join(', '))+')':'')+'</div>';return}
- $('cp').classList.remove('hide');$('cs').classList.remove('hide');$('y').textContent=j.yaml||'';stats(j);
+ $('cp').classList.remove('hide');$('cs').classList.remove('hide');$('iv').classList.toggle('hide',!j.segn);$('pv').classList.add('hide');$('y').textContent=j.yaml||'';stats(j);
  $('w').innerHTML=(j.problems&&j.problems.length)?'<div class=warn><b>Da controllare</b><br>'+j.problems.map(esc).join('<br>')+'</div>':'';
  $('sv').classList.toggle('hide',!window.__salva);
  $('cp').onclick=()=>copia(j.yaml||'');
  $('cs').onclick=()=>{const st=j.stats||{};copia(['Yamlic '+$('ver').textContent+' - '+(st.via||'')+(st.secondi!=null?' - '+st.secondi+' s':''),'','Richiesta: '+$('p').value.trim(),'','YAML:',j.yaml||'','','Avvisi: '+((j.problems&&j.problems.length)?j.problems.join(' | '):'nessuno'),'','Cosa non va: '].join('\n'))};
+ $('iv').onclick=()=>{const g=j.segn;if(!g)return;$('pt').textContent=['Versione: '+$('ver').textContent,'Richiesta: '+g.prompt,'','YAML:',g.yaml,'','Avvisi: '+((g.problems&&g.problems.length)?g.problems.join(' | '):'nessuno')].join('\n');$('pm').textContent='';$('pv').classList.remove('hide')};
+ $('no').onclick=()=>$('pv').classList.add('hide');
+ $('ok').onclick=async()=>{$('ok').disabled=true;try{const x=await (await fetch('api/segnala',{method:'POST',body:JSON.stringify({segn:j.segn,via:(j.stats||{}).via,nota:$('nt').value})})).json();$('pm').textContent=x.ok?'Inviata, grazie':(x.error||'errore');if(x.ok)setTimeout(()=>$('pv').classList.add('hide'),1500)}catch(e){$('pm').textContent='errore'}$('ok').disabled=false};
  $('sv').onclick=async()=>{const x=await (await fetch('api/create',{method:'POST',body:JSON.stringify({yaml:j.yaml})})).json();$('msg').textContent=x.ok?'Salvata in Home Assistant':(x.error||'errore')}}
 function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
  let h='<b>'+esc(d.testo)+'</b>';
@@ -162,7 +166,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.13"
+VERSIONE = "0.3.14"
 _RETE = {"t": 0, "v": None}
 
 
@@ -249,7 +253,29 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
     if anon and anon.unresolved(y):
         problems.append("alias rimasti: " + ", ".join(anon.unresolved(y)))
     usage = res.get("usage", {})
-    return {"yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+    try:
+        an = anon or core.Anon(ents, prompt, [(s.get("attributes") or {}).get("friendly_name", "") for s in states])
+        segn = {"prompt": an.prompt, "yaml": an.forward_yaml(y), "problems": [an.forward_yaml(p) for p in problems]}
+    except Exception:
+        segn = None
+    return {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+
+
+def segnala(d):
+    """Invia al relay (https) una segnalazione GIA anonima, solo su richiesta esplicita dell'utente."""
+    s = d.get("segn") or {}
+    body = {"v": VERSIONE, "via": str(d.get("via", ""))[:40], "prompt": str(s.get("prompt", ""))[:600], "yaml": str(s.get("yaml", ""))[:6000],
+            "problems": [str(p)[:300] for p in (s.get("problems") or [])][:12], "nota": str(d.get("nota", ""))[:600]}
+    ultimo = "nessuno smistatore"
+    for u in RELAYS:
+        url = u.replace("wss://", "https://").replace("ws://", "http://").rsplit("/ws", 1)[0] + "/segnala"
+        try:
+            rq = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(rq, timeout=10) as r:
+                return 200, json.loads(r.read().decode())
+        except Exception as ex:
+            ultimo = str(ex)[:80]
+    return 502, {"error": "invio non riuscito: " + ultimo}
 
 
 def create(y):
@@ -285,6 +311,9 @@ class H(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n) or b"{}")
             if self.path.endswith("/api/generate"):
                 self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati")))
+            elif self.path.endswith("/api/segnala"):
+                code, res = segnala(data)
+                self._send(code, res)
             elif self.path.endswith("/api/create"):
                 code, res = create(data.get("yaml", ""))
                 self._send(code, res)

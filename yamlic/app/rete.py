@@ -134,11 +134,37 @@ class Relay:
         self.others = list(other_relays)
         self.client_per_min = client_per_min
         self.stats = {"jobs": 0, "riusciti": 0, "err": 0, "since": int(time.time())}
+        self.segn_file = os.environ.get("YAMLIC_SEGNALAZIONI", "/opt/yamlic/data/segnalazioni.jsonl")
+        self.segn_ip = {}          # ip -> orari degli ultimi invii
 
     def app(self):
         a = web.Application()
-        a.add_routes([web.get("/ws", self.ws), web.get("/health", self.health), web.get("/stato", self.stato)])
+        a.add_routes([web.get("/ws", self.ws), web.get("/health", self.health), web.get("/stato", self.stato), web.post("/segnala", self.segnala)])
         return a
+
+    async def segnala(self, req):
+        """Riceve una segnalazione gia anonima dall'utente. Max 10 all'ora per indirizzo, 20 KB, solo testo."""
+        ip = req.headers.get("X-Real-IP") or req.remote or "?"
+        now = time.time()
+        L = [x for x in self.segn_ip.get(ip, []) if now - x < 3600]
+        if len(L) >= 10:
+            return web.json_response({"error": "troppi invii, riprova piu tardi"}, status=429)
+        raw = await req.content.read(20001)
+        if len(raw) > 20000:
+            return web.json_response({"error": "troppo grande"}, status=413)
+        try:
+            d = json.loads(raw.decode())
+            rec = {"t": int(now), "ip": hashlib.sha256(ip.encode()).hexdigest()[:8], "v": str(d.get("v", ""))[:12], "via": str(d.get("via", ""))[:40],
+                   "prompt": str(d.get("prompt", ""))[:600], "yaml": str(d.get("yaml", ""))[:6000],
+                   "problems": [str(p)[:300] for p in (d.get("problems") or [])][:12], "nota": str(d.get("nota", ""))[:600]}
+            os.makedirs(os.path.dirname(self.segn_file), exist_ok=True)
+            with open(self.segn_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            return web.json_response({"error": "formato non valido"}, status=400)
+        L.append(now)
+        self.segn_ip[ip] = L
+        return web.json_response({"ok": True})
 
     async def health(self, req):
         nodes = [(i, p) for i, p in self.peers.items() if "node" in p["roles"]]
