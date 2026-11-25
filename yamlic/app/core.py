@@ -353,6 +353,10 @@ def domini_mancanti(states, prompt):
         ok = [s for s in states if _dom(s["entity_id"]) == "sensor" and "temperatur" in _t(s) and not re.search(r"cpu|process|fritz|router|batteri", _t(s))]
         if not ok and "climate" not in doms:
             out.append("nessun sensore di temperatura ambiente")
+    if re.search(r"movimento|si muove|qualcuno entra|presenza in", low):
+        mov = [s for s in states if _dom(s["entity_id"]) == "binary_sensor" and ((s.get("attributes") or {}).get("device_class") in ("motion", "occupancy", "presence") or re.search(r"movimento|motion|presenza|\bpir\b|occupanc", _t(s)))]
+        if not mov:
+            out.append("nessun sensore di movimento o presenza")
     return ["in casa non c'e: " + m + ", l'automazione usa entita sbagliate" for m in out]
 
 STANZE_EXTRA = ("ingresso", "corridoio", "studio", "ripostiglio", "cantina", "garage", "terrazzo", "balcone", "lavanderia", "mansarda", "taverna", "soffitta", "cameretta")
@@ -432,6 +436,15 @@ def rules(cfg, prompt):
     if wd:
         conds = [c for c in conds if c.get("condition") != "time" or "weekday" not in c]
         conds.append({"condition": "time", "weekday": wd})
+    # pausa e spegnimento inventati: via se il prompt non parla di durata
+    acts = cfg.get("actions")
+    if isinstance(acts, list) and not re.search(r"minut|second|\bor[ae]\b|dopo|poi\b|per \d|temporizz|timer|finche|finch", lp):
+        for i, a in enumerate(acts):
+            if isinstance(a, dict) and "delay" in a and i > 0 and i + 1 < len(acts):
+                nxt = acts[i + 1]
+                if isinstance(nxt, dict) and str(nxt.get("action", "")).endswith(".turn_off") and "turn_off" not in lp and "spegn" not in lp:
+                    del acts[i:]
+                    break
     # condizioni inventate: via se il prompt non le chiede
     if not COND_CUE.search(lp):
         conds = []
