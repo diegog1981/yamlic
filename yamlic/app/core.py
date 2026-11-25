@@ -145,7 +145,7 @@ DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 # entita che non sono luci vere: opzioni, indicatori, schermi
-NOT_LIGHT = re.compile(r"stuf|forno|bollitor|caffe|frigo|router|stampant|televis|cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
+NOT_LIGHT = re.compile(r"stuf|forno|bollitor|caffe|frigo|router|stampant|televis|cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare|timer|countdown|\\bring\\b|wake|satellite|assist")
 ROOMS = [{"soggiorno", "salotto", "living", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
 
 def room_words(w):
@@ -501,6 +501,43 @@ def nome_esatto(y, states, prompt):
             a["target"] = {"entity_id": [eid]}
             changed = True
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n") if changed else y
+
+TRANNE = re.compile(r"\btranne\s+(?:quell\w+\s+|l\w+\s+|il\s+|lo\s+|i\s+|gli\s+|un\s+|una\s+)*(?:d\w+\s+|nel\w*\s+|in\s+)?([a-z\u00e0-\u00ff ]{4,40})")
+
+def tranne(y, states, prompt):
+    """'tranne X': toglie dai bersagli le entita di X (se ne resta almeno una)."""
+    m = TRANNE.search(prompt.lower())
+    if not m:
+        return y
+    parole = [w for w in re.findall(r"[a-z\u00e0-\u00ff]{4,}", m.group(1)) if w not in GENERIC and w not in STOP]
+    if not parole:
+        return y
+    escl = set()
+    for w in parole:
+        escl |= room_words(w)
+    by = {s_["entity_id"]: _t(s_) for s_ in states}
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    changed = False
+    out = []
+    for a in cfg["actions"]:
+        tg = (a.get("target") or {}).get("entity_id") if isinstance(a, dict) else None
+        if isinstance(tg, list):
+            keep = [e for e in tg if not any(x in by.get(e, "") for x in escl)]
+            if len(keep) != len(tg):
+                changed = True
+                if not keep:
+                    continue
+                a["target"]["entity_id"] = keep
+        out.append(a)
+    if not changed or not out:
+        return y
+    cfg["actions"] = out
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
 
 def repair(y, known, prompt=""):
     """Ripara id inventati dal modello: media.player.x, persone inesistenti, entita simili o uniche del dominio."""

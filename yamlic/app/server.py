@@ -1,6 +1,6 @@
 """Yamlic: add-on unico. Ruoli (tutti opzionali): cliente (pagina + rete), nodo, smistatore.
 Funziona anche fuori da Home Assistant (VPS, PC): senza SUPERVISOR_TOKEN parte solo come nodo/smistatore."""
-import asyncio, json, os, threading, time, urllib.request
+import asyncio, json, os, re, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import core, rete
@@ -166,7 +166,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.24"
+VERSIONE = "0.3.25"
 _RETE = {"t": 0, "v": None}
 
 
@@ -245,6 +245,7 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
     if not scelte:
         y = core.room_guard(y, states, prompt)
         y = core.nome_esatto(y, states, prompt)
+        y = core.tranne(y, states, prompt)
     y = core.via_pausa(y, prompt)
     y, avvisi = core.impulsi(y)
     problems = core.validate(y, known, prompt, remote=via != "locale")
@@ -252,6 +253,9 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
     problems += avvisi
     problems += core.domini_mancanti(states, prompt)
+    for sv in sorted(set(re.findall(r"\bnotify\.([a-z0-9_]+)", y))):
+        if not sv.startswith("mobile_app_") and sv not in ("persistent_notification", "send_message"):
+            problems.append("servizio notify.%s da verificare: in HA di solito e notify.mobile_app_<telefono>" % sv)
     for w in core.stanze_mancanti(states, prompt):
         problems.append("in casa non ho trovato nessuna entita o area per \u00ab%s\u00bb: controlla a mano il bersaglio" % w)
     ignote = core.unknown_entities(y, known)
