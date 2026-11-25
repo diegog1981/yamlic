@@ -343,6 +343,18 @@ TRIGGER_CUE = re.compile(r"quando|\bse\b|ogni|\balle\b|dalle|dopo|prima|appena|t
 COND_CUE = re.compile(r"solo se|soltanto|purche|purché|se non|solo quando|solo di|buio|notte|tramonto|alba|sole|presente|nessuno|qualcuno|feriali|lavorativ|weekend|fine settimana|sabato|domenica|luned|marted|mercoled|gioved|venerd|a casa|in casa|fuori casa|\\bse\\b")
 COLORI = {"rosso": (255, 0, 0), "verde": (0, 255, 0), "blu": (0, 0, 255), "azzurro": (0, 160, 255), "celeste": (0, 160, 255),
           "giallo": (255, 220, 0), "arancione": (255, 120, 0), "viola": (150, 0, 255), "rosa": (255, 90, 180)}
+MANCANTI = [(r"condizionator|climatizzator|termostat|riscaldament|\\bclima\\b", "climate", "nessun termostato o climatizzatore (climate.*)"),
+            (r"allarm", "alarm_control_panel", "nessun allarme (alarm_control_panel.*)")]
+
+def domini_mancanti(states, prompt):
+    low = prompt.lower(); doms = {_dom(s["entity_id"]) for s in states}
+    out = [m for rx, d, m in MANCANTI if re.search(rx, low) and d not in doms]
+    if re.search(r"temperatur", low):
+        ok = [s for s in states if _dom(s["entity_id"]) == "sensor" and "temperatur" in _t(s) and not re.search(r"cpu|process|fritz|router|batteri", _t(s))]
+        if not ok and "climate" not in doms:
+            out.append("nessun sensore di temperatura ambiente")
+    return ["in casa non c'e: " + m + ", l'automazione usa entita sbagliate" for m in out]
+
 STANZE_EXTRA = ("ingresso", "corridoio", "studio", "ripostiglio", "cantina", "garage", "terrazzo", "balcone", "lavanderia", "mansarda", "taverna", "soffitta", "cameretta")
 
 def stanze_mancanti(states, prompt):
@@ -423,6 +435,13 @@ def rules(cfg, prompt):
     # condizioni inventate: via se il prompt non le chiede
     if not COND_CUE.search(lp):
         conds = []
+    # condizioni su select/number/text mai citati nel prompt: inventate
+    def citata(c):
+        e = str(c.get("entity_id", "")) if isinstance(c, dict) else ""
+        if e.split(".")[0] not in ("select", "number", "text", "input_select", "input_text"):
+            return True
+        return any(len(w) > 3 and w not in ("casa", "home", "smart", "sensor", "stato") and w in lp for w in e.split(".", 1)[1].split("_"))
+    conds = [c for c in conds if citata(c)]
     # qualcuno a casa
     if re.search(r"se c.?e qualcuno|qualcuno (e |è )?(a|in) casa|solo se (siamo|sono) (a|in) casa", lp) and not any("zone.home" in str(c) for c in conds):
         conds.append({"condition": "numeric_state", "entity_id": "zone.home", "above": 0})

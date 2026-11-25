@@ -166,7 +166,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.19"
+VERSIONE = "0.3.20"
 _RETE = {"t": 0, "v": None}
 
 
@@ -250,6 +250,7 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
     problems += avvisi
+    problems += core.domini_mancanti(states, prompt)
     for w in core.stanze_mancanti(states, prompt):
         problems.append("in casa non ho trovato nessuna entita o area per \u00ab%s\u00bb: controlla a mano il bersaglio" % w)
     ignote = core.unknown_entities(y, known)
