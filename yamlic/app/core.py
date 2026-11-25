@@ -424,6 +424,9 @@ def repair(y, known, prompt=""):
             if uscita or ritorno:
                 t = {"trigger": "numeric_state", "entity_id": "zone.home", **({"below": 1} if uscita else {"above": 0})}
         trig.append(t)
+    meteo = next((k for k in sorted(known) if k.startswith("weather.")), None)
+    if meteo and re.search(r"piove|pioggia|piovere", lp):
+        trig = [{"trigger": "state", "entity_id": meteo, "to": "rainy"} if isinstance(t, dict) and isinstance(t.get("entity_id"), str) and t["entity_id"] not in known else t for t in trig]
     if trig:
         cfg["triggers"] = trig
     def fix(e):
@@ -454,6 +457,45 @@ def repair(y, known, prompt=""):
                 walk(i)
     walk(cfg)
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
+def fill_empty(y, states, prompt):
+    """Azioni luce/interruttore/tenda con target vuoto: le riempie con le entita che meglio corrispondono alla stanza nominata."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("actions"), list):
+        return y
+    low = prompt.lower()
+    words = {w for w in re.findall(r"\w{4,}", low) if w not in STOP and w not in GENERIC}
+    changed = False
+    for a in cfg["actions"]:
+        if not isinstance(a, dict):
+            continue
+        d = str(a.get("action", "")).split(".")[0]
+        if d not in ("light", "switch", "cover") or any(e for e in _target_ents(a)):
+            continue
+        sc = []
+        for s_ in states:
+            eid = s_["entity_id"]
+            t = _t(s_)
+            if _dom(eid) != d and not (d == "light" and _dom(eid) == "switch"):
+                continue
+            if d in ("light",) and not is_light_like(eid, t):
+                continue
+            if d == "switch" and (_dom(eid) != "switch" or NOT_LIGHT.search(t)):
+                continue
+            n = sum(any(x in t for x in room_words(w)) for w in words)
+            if n:
+                sc.append((n, eid))
+        if not sc:
+            continue
+        top = max(n for n, _ in sc)
+        ids = sorted(e for n, e in sc if n == top)
+        a["target"] = {"entity_id": ids}
+        a.pop("entity_id", None)
+        changed = True
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n") if changed else y
 
 IMPULSO = re.compile(r"cancell|portone|garage|basculante")
 

@@ -162,7 +162,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.12"
+VERSIONE = "0.3.13"
 _RETE = {"t": 0, "v": None}
 
 
@@ -237,6 +237,7 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
     y, tolte = core.clean(y, known)
     y = core.force_targets(y, scelte or [], prompt, known)
+    y = core.fill_empty(y, states, prompt)
     y, avvisi = core.impulsi(y)
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
