@@ -34,7 +34,8 @@ ospiti sensore interruttore switch light cover sensor climate person notify zone
 binary script automazione stato batteria energia potenza consumo""".split())
 TOK = re.compile(r"[A-Za-zÀ-ÿ0-9]+")
 SAFE = set("update home assist satellite assistant voice status ring display screen sun zone mode night enabled reset restart identify mute sound debug kiosk".split())
-SYSWORDS = {w.lower() for w in re.findall(r"[A-Za-zÀ-ÿ0-9]+", SYSTEM)} | SAFE
+STOPIT = set("del dello della dei degli delle con per una uno che non tra fra sul sullo sulla sui nel nello nella nei alle alla allo agli dal dallo dalla dai dalle sua suo suoi sue tutte tutti tutto solo anche come quando dopo prima sono stato".split())
+SYSWORDS = {w.lower() for w in re.findall(r"[A-Za-zÀ-ÿ0-9]+", SYSTEM)} | SAFE | STOPIT
 QUOTED = re.compile(r'"([^"\n]{1,200})"|«([^»\n]{1,200})»')
 
 def _dom(eid):
