@@ -138,12 +138,12 @@ class Anon:
 # ---------- scelta entita ----------
 DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover", "clima": "climate",
            "esco": "person", "esce": "person", "arriv": "person", "rientr": "person", "uscit": "person",
-           " tend": "cover", "movimento": "binary_sensor", "porta": "binary_sensor", "finestra": "binary_sensor"}
+           " tend": "cover", "serratur": "lock", "bloc": "lock", "sblocc": "lock", "movimento": "binary_sensor", "porta": "binary_sensor", "finestra": "binary_sensor"}
 
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 # entita che non sono luci vere: opzioni, indicatori, schermi
-NOT_LIGHT = re.compile(r"cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
+NOT_LIGHT = re.compile(r"stuf|forno|bollitor|caffe|frigo|router|stampant|televis|cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare")
 ROOMS = [{"soggiorno", "salotto", "living", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
 
 def room_words(w):
@@ -176,7 +176,9 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
             if named or (io_person == eid and FIRST.search(low)):
                 persons.append((eid, name))
             continue
-        light_like = "light" in wanted and _dom(eid) == "switch" and bool(LIGHT_LIKE.search(text)) and not NOT_LIGHT.search(text)
+        arw = (s.get("attributes") or {}).get("_area", "").lower()
+        in_room = bool(arw) and any(len(w) > 3 and room_words(w) and w in arw or (len(w) > 3 and arw in low) for w in words)
+        light_like = "light" in wanted and _dom(eid) == "switch" and (bool(LIGHT_LIKE.search(text)) or in_room) and not NOT_LIGHT.search(text)
         bonus = 3 if (_dom(eid) in wanted or light_like) else 0
         scored.append((sum(w in text for w in words) + bonus, eid, name, light_like))
     if wanted:
