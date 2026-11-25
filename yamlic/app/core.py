@@ -375,10 +375,15 @@ def force_targets(y, scelte, prompt=""):
                 continue
             o2.append(a)
         out = o2
-    if re.search(r"solo se (?:\u00e8 |e |fa )?buio|quando (?:\u00e8 |e |fa )?buio|di notte|dopo il tramonto|se (?:\u00e8 |e )?notte|al buio", prompt.lower()):
+    if re.search(r"solo se (?:\u00e8 |e |fa )?buio|quando (?:\u00e8 |e |fa )?buio|solo di notte|dopo il tramonto|solo se (?:\u00e8 |e )?notte|al buio", prompt.lower()):
         out = [a for a in out if not (isinstance(a, dict) and "if" in a and "sun" in str(a.get("if")))]
         cfg["conditions"] = [{"condition": "or", "conditions": [{"condition": "sun", "after": "sunset"}, {"condition": "sun", "before": "sunrise"}]}]
     cfg["actions"] = out
+    for t in cfg.get("triggers") or []:
+        if isinstance(t, dict) and isinstance(t.get("at"), str):
+            m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", t["at"].strip())
+            if m:
+                t["at"] = "%02d:%s:%s" % (int(m.group(1)), m.group(2), m.group(3) or "00")
     if prompt and not TRIGGER_CUE.search(prompt.lower()):
         cfg["triggers"] = [{"trigger": "event", "event_type": "yamlic_manuale"}]
         cfg["conditions"] = []
