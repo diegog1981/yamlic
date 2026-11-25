@@ -180,7 +180,8 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
             continue
         arw = (s.get("attributes") or {}).get("_area", "").lower()
         in_room = bool(arw) and any(len(w) > 3 and any(x in arw for x in room_words(w)) for w in words)
-        light_like = "light" in wanted and _dom(eid) == "switch" and (bool(LIGHT_LIKE.search(text)) or in_room) and not NOT_LIGHT.search(text)
+        nome_stanza = any(len(w) > 4 and w not in GENERIC and w not in STOP and w in name.lower() for w in words)
+        light_like = "light" in wanted and _dom(eid) == "switch" and (bool(LIGHT_LIKE.search(text)) or in_room or nome_stanza) and not NOT_LIGHT.search(text)
         bonus = 3 if (_dom(eid) in wanted or light_like) else 0
         scored.append((sum(w in text for w in words) + bonus, eid, name, light_like))
     if wanted:
