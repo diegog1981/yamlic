@@ -650,6 +650,25 @@ def room_guard(y, states, prompt):
 
 IMPULSO = re.compile(r"cancell|portone|garage|basculante")
 
+DURATA = re.compile(r"minut|second|\bor[ae]\b|dopo|poi\b|per \d|temporizz|timer|finche|finch|ritard|attendi|aspetta")
+
+def via_pausa(y, prompt):
+    """Il modello a volte aggiunge 'delay + azione' non richiesti: se il prompt non parla di durata li toglie."""
+    if DURATA.search(prompt.lower()):
+        return y
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    acts = cfg.get("actions") if isinstance(cfg, dict) else None
+    if not isinstance(acts, list):
+        return y
+    for i, a in enumerate(acts):
+        if i > 0 and isinstance(a, dict) and "delay" in a and all(isinstance(b, dict) and str(b.get("action", "")).split(".", 1)[0] in ("light", "switch") for b in acts[i + 1:]):
+            del acts[i:]
+            return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+    return y
+
 def impulsi(y):
     """Cancelli/garage su switch sono quasi sempre a impulso: un solo turn_on. Ritorna (yaml, avvisi)."""
     try:

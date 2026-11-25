@@ -166,7 +166,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.21"
+VERSIONE = "0.3.22"
 _RETE = {"t": 0, "v": None}
 
 
@@ -245,6 +245,7 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
     if not scelte:
         y = core.room_guard(y, states, prompt)
         y = core.nome_esatto(y, states, prompt)
+    y = core.via_pausa(y, prompt)
     y, avvisi = core.impulsi(y)
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
