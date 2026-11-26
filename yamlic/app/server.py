@@ -1,6 +1,7 @@
 """Yamlic: add-on unico. Ruoli (tutti opzionali): cliente (pagina + rete), nodo, smistatore.
 Funziona anche fuori da Home Assistant (VPS, PC): senza SUPERVISOR_TOKEN parte solo come nodo/smistatore."""
 import asyncio, json, os, re, threading, time, urllib.request
+import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import core, rete
@@ -67,7 +68,8 @@ pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overf
 <div id=r class="card hide">
 <div class=chips id=st></div>
 <pre id=y></pre>
-<div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=iv class=s>Invia a Diego</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
+<div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=iv class=s>Invia a Diego</button><button id=md class=s>Modifica</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
+<div id=mb class="row hide"><input id=mi style="flex:1;min-width:12em;font:inherit;padding:.55em;border-radius:10px;border:1px solid var(--bd);background:var(--code);color:var(--tx)" placeholder="Cosa vuoi cambiare? (es. solo nei giorni feriali, luminosita al 40%)"><button id=mg>Applica</button></div>
 <div id=w></div>
 <div id=pv class="warn hide"><b>Cosa arriva a Diego</b> (nomi e testi sono gia sostituiti da codici, la tua casa non si riconosce):<pre id=pt></pre><textarea id=nt rows=2 placeholder="Cosa non va? (facoltativo)"></textarea><div class=row><button id=ok>Invia</button><button id=no class=s>Annulla</button><span id=pm class=mu></span></div></div>
 </div>
@@ -99,8 +101,14 @@ function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.re
   $('w').innerHTML='<div class="warn err">'+esc(j.error)+(j.problems?' ('+esc(j.problems.join(', '))+')':'')+'</div>';return}
  $('cp').classList.remove('hide');$('cs').classList.remove('hide');$('iv').classList.toggle('hide',!j.segn);$('pv').classList.add('hide');$('y').textContent=j.yaml||'';stats(j);
  $('w').innerHTML=(j.problems&&j.problems.length)?'<div class=warn><b>Da controllare</b><br>'+j.problems.map(esc).join('<br>')+'</div>':'';
- $('sv').classList.toggle('hide',!window.__salva);
+ $('sv').classList.toggle('hide',!window.__salva);$('md').classList.toggle('hide',!!j.parti);$('mb').classList.add('hide');
  $('cp').onclick=()=>copia(j.yaml||'');
+ $('md').onclick=()=>{$('mb').classList.toggle('hide');$('mi').focus()};
+ $('mg').onclick=async()=>{const t=$('mi').value.trim();if(!t||busy)return;busy=true;$('mg').disabled=true;$('msg').innerHTML='<span class=sp></span>Modifico...';
+  try{const x=await (await fetch('api/modifica',{method:'POST',body:JSON.stringify({yaml:j.yaml,istruzione:t})})).json();
+   if(x.error){$('msg').textContent=x.error}else{j.yaml=x.yaml;j.problems=x.problems;j.stats=x.stats;j.segn=null;$('mi').value='';risultato(j)}}catch(e){$('msg').textContent='Errore: '+e}
+  busy=false;$('mg').disabled=false;if($('msg').querySelector&&$('msg').querySelector('.sp'))$('msg').textContent=''};
+
  $('cs').onclick=()=>{const st=j.stats||{};copia(['Yamlic '+$('ver').textContent+' - '+(st.via||'')+(st.secondi!=null?' - '+st.secondi+' s':''),'','Richiesta: '+$('p').value.trim(),'','YAML:',j.yaml||'','','Avvisi: '+((j.problems&&j.problems.length)?j.problems.join(' | '):'nessuno'),'','Cosa non va: '].join('\n'))};
  $('iv').onclick=()=>{const g=j.segn;if(!g)return;$('pt').textContent=['Versione: '+$('ver').textContent,'Richiesta: '+g.prompt,'','YAML:',g.yaml,'','Avvisi: '+((g.problems&&g.problems.length)?g.problems.join(' | '):'nessuno')].join('\n');$('pm').textContent='';$('pv').classList.remove('hide')};
  $('no').onclick=()=>$('pv').classList.add('hide');
@@ -135,6 +143,22 @@ def ha(path, data=None):
         return json.loads(raw) if raw else None
 
 
+_NOTIFY = {"t": 0, "d": []}
+
+
+def servizi_notify():
+    """Servizi notify.* reali di HA (cache 10 minuti)."""
+    if time.time() - _NOTIFY["t"] < 600:
+        return _NOTIFY["d"]
+    try:
+        d = next((x for x in (ha("/services") or []) if x.get("domain") == "notify"), {})
+        _NOTIFY["d"] = ["notify." + k for k in sorted((d.get("services") or {}).keys())]
+    except Exception:
+        pass
+    _NOTIFY["t"] = time.time()
+    return _NOTIFY["d"]
+
+
 _AREE = {"t": 0, "d": {}}
 AREE_TPL = "{%- set o = namespace(l=[]) -%}{%- for s in states -%}{%- set a = area_name(s.entity_id) -%}{%- if a -%}{%- set o.l = o.l + [[s.entity_id, a]] -%}{%- endif -%}{%- endfor -%}{{ o.l | tojson }}"
 
@@ -166,7 +190,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.27"
+VERSIONE = "0.3.28"
 _RETE = {"t": 0, "v": None}
 
 
@@ -193,7 +217,7 @@ def rete_info():
 
 
 # ---------- cliente ----------
-def generate(prompt, scelte=None, persona="", salta=False, stati=None):
+def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
     states = stati if isinstance(stati, list) and stati else ha("/states")   # stati: solo per le prove con case finte
     ar = {} if stati else aree()
     for st_ in states:
@@ -213,8 +237,11 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
         try:
             lista = "\n".join("- %s (%s)" % (e, n) for e, n in ents)
             sm = SYSTEM + ((" L'utente che scrive e %s: quando dice io, esco, rientro, arrivo, usa quella persona." % io) if io else "")
-            res = llm_call({"messages": [{"role": "system", "content": sm}, {"role": "user", "content": "Entita disponibili:\n%s\n\nRichiesta: %s" % (lista, prompt)}],
-                            "temperature": 0.2, "max_tokens": 450})
+            req = {"messages": [{"role": "system", "content": sm}, {"role": "user", "content": "Entita disponibili:\n%s\n\nRichiesta: %s" % (lista, prompt)}],
+                   "temperature": 0.2, "max_tokens": 450}
+            if flag("grammatica", False):
+                req["grammar"] = core.grammatica([e for e, _ in ents])
+            res = llm_call(req)
             y = core.extract_yaml(text_of(res))
         except Exception as ex:
             err, res = str(ex)[:80], None
@@ -225,6 +252,8 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
             return {"error": "controllo privacy fallito, non invio nulla alla rete", "problems": anon.leaks(out)}
         sm = SYSTEM + ((" L'utente che scrive e %s." % anon.alias[io]) if io in anon.alias else "")
         payload = {"messages": [{"role": "system", "content": sm}, {"role": "user", "content": out}], "temperature": 0.2, "max_tokens": 450}
+        if flag("grammatica", False):
+            payload["grammar"] = core.grammatica(re.findall(r"^- ([a-z_]+\.\S+) \(", out, re.M))
 
         def accept(r):
             try:
@@ -232,7 +261,15 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
             except Exception:
                 return False
         try:
-            res, node = asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE))
+            def dubbio(r):
+                """Risposta valida ma poco fiduciosa: le regole hanno dovuto intervenire o il trigger e solo manuale."""
+                try:
+                    yy = core.clean(anon.restore(core.extract_yaml(text_of(r))), known)[0]
+                    return core.trigger_da_testo(yy, states, prompt) != yy or bool(core.regole_028(yy, prompt)[1]) or bool(core.ripara(yy, states, prompt)[1])
+                except Exception:
+                    return True
+            res, node = asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE,
+                                             adaptive=flag("voto_adattivo", True), escalate=dubbio, firma=lambda r: core.firma(core.extract_yaml(text_of(r)))))
             via = "rete:" + node[:6]
             y = anon.restore(core.extract_yaml(text_of(res)))
         except Exception as ex:
@@ -249,6 +286,11 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
         y = core.trigger_da_testo(y, states, prompt)
     y = core.via_pausa(y, prompt)
     y, avvisi = core.impulsi(y)
+    y, av28 = core.regole_028(y, prompt)
+    avvisi = avvisi + av28
+    if flag("ripara", True):
+        y, avr = core.ripara(y, states, prompt, [] if stati else servizi_notify())
+        avvisi = avvisi + avr
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
@@ -271,6 +313,109 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
     except Exception:
         segn = None
     return {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+
+
+def generate(prompt, scelte=None, persona="", salta=False, stati=None):
+    """Richieste lunghe con piu 'quando' indipendenti: divise in parti, generate in parallelo e riunite (automazioni separate)."""
+    parti = core.scomponi(prompt) if (flag("scomponi", True) and not scelte and not persona) else [prompt]
+    if len(parti) < 2:
+        return _genera_uno(prompt, scelte, persona, salta, stati)
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.time()
+    if not salta:   # chiarimenti una volta sola, sull'intera richiesta
+        states = stati if isinstance(stati, list) and stati else ha("/states")
+        ar = {} if stati else aree()
+        for st_ in states:
+            if st_["entity_id"] in ar:
+                st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
+        dom = core.ambiguity(states, prompt, OPT.get("io_person") or "")
+        if dom:
+            return {"domanda": dom}
+    with ThreadPoolExecutor(min(3, len(parti))) as ex:
+        ris = list(ex.map(lambda p: _genera_uno(p, None, "", True, stati), parti))
+    dom = [r for r in ris if r.get("domanda")]
+    if dom and len(dom) == len(ris):
+        return _genera_uno(prompt, scelte, persona, salta, stati)
+    ris = core.unisci_stesso_trigger(ris)
+    y, pr = core.unisci(ris)
+    pr += core.controlla_jinja(y)
+    try:
+        list(yaml.safe_load_all(y))
+    except Exception:
+        pr.append("il YAML unito non e valido, controllalo")
+    ok = [r for r in ris if r.get("stats")]
+    via = ", ".join(sorted({r["stats"]["via"] for r in ok})) or "-"
+    return {"segn": (ok[0].get("segn") if ok else None), "yaml": y, "problems": ["richiesta divisa in %d automazioni, controllale una per una" % len(parti)] + pr,
+            "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": None}, "parti": [{"prompt": p, "ok": not r.get("error")} for p, r in zip(parti, ris)]}
+
+
+def modifica(d):
+    """Modifica un'automazione esistente: prima regole fisse (orario, giorni, luminosita, condizioni), poi il modello."""
+    y0, istr = str(d.get("yaml") or "").strip(), str(d.get("istruzione") or "").strip()
+    if not y0 or not istr:
+        return {"error": "servono il YAML e cosa vuoi cambiare"}
+    try:
+        if not isinstance(yaml.safe_load(y0), dict):
+            return {"error": "il YAML non e un'automazione"}
+    except Exception:
+        return {"error": "il YAML non e valido"}
+    stati = d.get("stati") if isinstance(d.get("stati"), list) and d.get("stati") else None
+    states = stati or ha("/states")
+    ar = {} if stati else aree()
+    for st_ in states:
+        if st_["entity_id"] in ar:
+            st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
+    nomi = {s_["entity_id"]: (s_.get("attributes") or {}).get("friendly_name", "") for s_ in states}
+    io = OPT.get("io_person") or ""
+    ents, known = core.select_entities(states, istr, io)
+    usate = [e for e in dict.fromkeys(re.findall(r"\b[a-z_]+\.[a-z0-9_]+\b", y0)) if e in nomi]
+    elenco = list(dict.fromkeys(usate + [e for e, _ in ents]))[:15]
+    ents = [(e, nomi.get(e, "")) for e in elenco]
+    t0 = time.time()
+    via, y, extra = "regole", "", []
+    r = core.modifica_regole(y0, istr)
+    if r:
+        y, extra = r[0], ["modifica fatta con regole fisse: " + r[1]]
+    else:
+        res = None
+        if HAS_LOCAL and OPT.get("modo", "auto") != "rete":
+            try:
+                lista = "\n".join("- %s (%s)" % (e, n) for e, n in ents)
+                u = "Entita disponibili:\n%s\n\nAutomazione attuale:\n```yaml\n%s\n```\n\nModifica richiesta: %s" % (lista, y0, istr)
+                res = llm_call({"messages": [{"role": "system", "content": core.SYSTEM_MOD}, {"role": "user", "content": u}], "temperature": 0.2, "max_tokens": 600})
+                y, via = core.extract_yaml(text_of(res)), "locale"
+            except Exception:
+                res = None
+        if res is None and USA_RETE and RELAYS and OPT.get("modo", "auto") != "locale":
+            anon = core.Anon(ents, istr, list(nomi.values()))
+            u = "Entita disponibili:\n%s\n\nAutomazione attuale:\n```yaml\n%s\n```\n\nModifica richiesta: %s" % (anon.entity_lines(), anon.forward_yaml(y0), anon.prompt)
+            if anon.leaks(u):
+                return {"error": "controllo privacy fallito, non invio nulla alla rete", "problems": anon.leaks(u)}
+            payload = {"messages": [{"role": "system", "content": core.SYSTEM_MOD}, {"role": "user", "content": u}], "temperature": 0.2, "max_tokens": 600}
+
+            def accept(rr):
+                try:
+                    return not core.validate(core.clean(anon.restore(core.extract_yaml(text_of(rr))), known)[0], known, istr, remote=True)
+                except Exception:
+                    return False
+            try:
+                res, node = asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE))
+                y, via = anon.restore(core.extract_yaml(text_of(res))), "rete:" + node[:6]
+            except Exception as ex:
+                return {"error": "rete non disponibile: %s" % ex}
+        if res is None:
+            return {"error": "nessun modello disponibile per questa modifica"}
+    y, tolte = core.clean(y, known)
+    y = core.via_pausa(y, istr) if False else y
+    problems = core.validate(y, known, istr, remote=via != "locale" and via != "regole") + extra
+    if tolte:
+        problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
+    try:
+        if yaml.safe_load(y) == yaml.safe_load(y0):
+            problems.append("l'automazione e rimasta uguale: prova a dire la modifica in altro modo")
+    except Exception:
+        pass
+    return {"yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via}}
 
 
 def segnala(d):
@@ -323,6 +468,8 @@ class H(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n) or b"{}")
             if self.path.endswith("/api/generate"):
                 self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati")))
+            elif self.path.endswith("/api/modifica"):
+                self._send(200, modifica(data))
             elif self.path.endswith("/api/segnala"):
                 code, res = segnala(data)
                 self._send(code, res)
@@ -372,7 +519,7 @@ async def rete_main():
         tps = await asyncio.get_running_loop().run_in_executor(None, benchmark)
         print("Nodo attivo, velocita %s token/s, id %s" % (tps, IDENT.id), flush=True)
         urls = RELAYS + (["ws://127.0.0.1:%d/ws" % port] if flag("smistatore") else [])
-        tasks.append(rete.run_node(IDENT, urls, node_handler, busy, {"tps": tps, "model": "qwen2.5-coder-1.5b"},
+        tasks.append(rete.run_node(IDENT, urls, node_handler, busy, {"tps": tps, "model": "qwen2.5-coder-1.5b", "slots": 1},
                                    direct=flag("diretto"), ice=ICE))
     await (asyncio.gather(*tasks) if tasks else asyncio.Event().wait())
 

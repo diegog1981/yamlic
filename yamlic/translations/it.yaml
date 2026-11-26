@@ -41,6 +41,18 @@ configuration:
   io_person:
     name: La tua persona (facoltativo)
     description: "Scegli la tua entità persona, per esempio person.mario, così \"esco di casa\" o \"quando arrivo\" si riferisce a te."
+  scomponi:
+    name: Dividi le richieste lunghe
+    description: "Se scrivi più cose con un 'quando' ciascuna, Yamlic le divide in automazioni separate e le genera in parallelo."
+  voto_adattivo:
+    name: Controllo con più nodi se la risposta è dubbia
+    description: "Chiede prima a un solo nodo. Se la risposta non convince, ne interpella altri e sceglie la struttura più comune."
+  ripara:
+    name: Ripara errori del modello
+    description: Corregge da solo servizi inesistenti, notifiche non risolte, luci scambiate con la TV, trigger della pioggia, stanza sbagliata.
+  grammatica:
+    name: Grammatica (sperimentale)
+    description: "Obbliga il modello a usare solo le entità e i servizi dell'elenco. Spento di default: va provato."
 network:
   8099/tcp: Pagina di Yamlic
   8100/tcp: Porta dello smistatore (solo se attivi il ruolo smistatore)

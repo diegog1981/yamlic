@@ -478,6 +478,16 @@ def rules(cfg, prompt):
     cfg["conditions"] = conds
     return cfg
 
+_TUTTE_STANZE = {"soggiorno", "salotto", "salone", "cucina", "bagno", "camera", "cameretta", "letto", "giardino", "ingresso", "corridoio",
+                 "studio", "mansarda", "taverna", "lavanderia", "terrazzo", "balcone", "garage", "cantina", "ufficio", "isola", "tavolo"}
+
+
+def _altra_stanza(testo, low, w):
+    """Il nome contiene un'altra stanza che il prompt non cita (es. 'bagno ingresso bagno' per 'luce dell'ingresso')."""
+    g = room_words(w)
+    return any(r not in g and re.search(r"\b%s\b" % r, testo) and r not in low for r in _TUTTE_STANZE)
+
+
 def nome_esatto(y, states, prompt):
     """Se una parola del prompt coincide col nome esatto di un solo interruttore/luce e il modello ha scelto altro, usa quello."""
     low = prompt.lower()
@@ -502,7 +512,7 @@ def nome_esatto(y, states, prompt):
                 continue
             tg = (a.get("target") or {}).get("entity_id")
             ids = tg if isinstance(tg, list) else [tg] if tg else []
-            if eid in ids or any(w in _t(by[i]) for i in ids if i in by):
+            if eid in ids or any(w in _t(by[i]) and not _altra_stanza(_t(by[i]), low, w) for i in ids if i in by):
                 continue
             a["action"] = _dom(eid) + "." + a["action"].split(".", 1)[1]
             a["target"] = {"entity_id": [eid]}
@@ -1028,3 +1038,464 @@ def validate(y, known, prompt="", remote=False):
         if c["condition"] not in {"state", "numeric_state", "time", "sun", "template", "zone", "trigger", "or", "and", "not"}:
             p.append("condizione sconosciuta: %s" % c["condition"])
     return list(dict.fromkeys(p))
+
+
+# ================= 0.3.28 =================
+SERVIZI_OK = {"light", "switch", "cover", "fan", "climate", "media_player", "lock", "vacuum", "scene", "script", "input_boolean", "input_number", "input_select",
+              "input_button", "input_datetime", "input_text", "notify", "tts", "alarm_control_panel", "homeassistant", "persistent_notification", "humidifier", "button",
+              "number", "select", "automation", "water_heater", "siren", "valve", "remote", "counter", "timer", "event"}
+_PIAZZE = ("domain", "state", "attribute")
+
+
+def _passi(lst, fn):
+    """Applica fn(passo)->passo|None a tutti i passi, anche dentro choose/if/sequence/repeat. Ritorna la nuova lista."""
+    out = []
+    for a in lst or []:
+        if not isinstance(a, dict):
+            out.append(a); continue
+        a = fn(a)
+        if a is None:
+            continue
+        for k in ("sequence", "then", "else", "default"):
+            if isinstance(a.get(k), list):
+                a[k] = _passi(a[k], fn)
+        if isinstance(a.get("choose"), list):
+            for o in a["choose"]:
+                if isinstance(o, dict) and isinstance(o.get("sequence"), list):
+                    o["sequence"] = _passi(o["sequence"], fn)
+        if isinstance(a.get("repeat"), dict) and isinstance(a["repeat"].get("sequence"), list):
+            a["repeat"]["sequence"] = _passi(a["repeat"]["sequence"], fn)
+        out.append(a)
+    return out
+
+
+def _citata(eid, lp):
+    """True se il prompt cita l'entita (almeno una parola del suo id/nome)."""
+    parole = [p for p in re.split(r"[._]", eid.lower())[1:] if len(p) >= 4 and p not in ("sonoff", "shelly", "light", "switch", "luce")]
+    return any(p[:5] in lp for p in parole) if parole else False
+
+
+_SIN = {"media_player": r"\btv\b|televis|stereo|altoparlante|musica", "light": r"luce|luci|lampad|faretti", "switch": r"presa|interruttore|stufa|caldai|pompa", "fan": r"ventola", "cover": r"tapparell|tend|serrand"}
+_STATO = r"acces|spent|apert|chius|in funzione|\battiv"
+
+
+def regole_028(y, prompt):
+    """Dopo il modello: (1) toglie azioni con servizi inventati (camera.*, ...), (2) toglie condizioni su luci/prese non citate,
+    (3) avvisa turn_off+turn_on sulla stessa entita, (4) avvisa se il prompt ha due orari e l'automazione uno solo. Ritorna (yaml, avvisi)."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y, []
+    if not isinstance(cfg, dict):
+        return y, []
+    lp = prompt.lower()
+    avv, mod = [], [False]
+
+    def servizio(a):
+        s = str(a.get("action", "")) if "action" in a else ""
+        if s and "." in s and s.split(".", 1)[0] not in SERVIZI_OK:
+            avv.append("servizio inventato tolto: %s" % s); mod[0] = True
+            return None
+        return a
+    if isinstance(cfg.get("actions"), list):
+        cfg["actions"] = _passi(cfg["actions"], servizio)
+    conds = cfg.get("conditions")
+    if isinstance(conds, list):
+        nuove = []
+        for c in conds:
+            if isinstance(c, dict) and c.get("condition") == "state" and isinstance(c.get("entity_id"), str) \
+                    and c["entity_id"].split(".")[0] in ("light", "switch", "fan", "cover", "media_player") \
+                    and not _citata(c["entity_id"], lp) and not (re.search(_SIN.get(c["entity_id"].split(".")[0], "$^"), lp) and re.search(_STATO, lp)) and not re.search(r"\bse (e|è|era|sono|la|il)\b.*(spent|acces|apert|chius)|gia (acces|spent)", lp):
+                avv.append("condizione non richiesta tolta: %s" % c["entity_id"]); mod[0] = True
+                continue
+            nuove.append(c)
+        if len(nuove) != len(conds):
+            cfg["conditions"] = nuove
+    # turn_on + turn_off sulla stessa entita
+    viste = {}
+    for a in cfg.get("actions") or []:
+        if isinstance(a, dict) and str(a.get("action", "")).endswith((".turn_on", ".turn_off")):
+            t = (a.get("target") or {}).get("entity_id")
+            for e in (t if isinstance(t, list) else [t]):
+                if isinstance(e, str):
+                    viste.setdefault(e, set()).add(a["action"].rsplit(".", 1)[1])
+    for e, s in sorted(viste.items()):
+        if len(s) > 1 and not re.search(DURATA, lp):
+            avv.append("accende e spegne %s nella stessa automazione: controlla" % e)
+    # due orari
+    ore = set(re.findall(r"\balle\s+(\d{1,2})(?:[:.](\d{2})| e (\d{1,2}))?\b", lp))
+    orari = {(h, m or m2 or "0") for h, m, m2 in ore}
+    nt = sum(1 for t in (cfg.get("triggers") or []) if isinstance(t, dict) and t.get("trigger") == "time")
+    ha_choose = "choose" in y
+    if len(orari) >= 2 and nt < 2 and not ha_choose and not re.search(r"\bdalle\b.*\balle\b|\btra le\b", lp):
+        avv.append("la richiesta ha due orari ma l'automazione ne ha uno solo: controlla")
+    if mod[0]:
+        y = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+    return y, avv
+
+
+# ---------- scomposizione ----------
+_AZIONE = re.compile(r"\b(accend|spegn|apr[ie]|chiud|avvis|mand|blocc|sblocc|attiv|disattiv|imposta|mett|avvia|ferma|notific|abbass|alza|porta|fai|dimmi|annunci|illumin)\w*")
+_QUANDO = re.compile(r"\b(quando|appena|ogni|alle\s+\d|al tramonto|all'alba|al sorgere|se\s+(?:la|il|lo|le|in|c'e|c'è|qualcuno|piove|fa)|dopo le|ogni volta|a mezzanotte|a mezzogiorno|di mattina|di sera|stasera|domani)\b")
+_ANAFORA = re.compile(r"\b(?:accend|spegn|apr|chiud|blocc|sblocc|attiv|disattiv|ferm|avvi|alz|abbass|riaccend|riapr|richiud|mett)\w*(?:la|lo|le|li)\b|\b(la stessa|lo stesso|le stesse|stessa luce|stesse luci|poi la|poi lo|di nuovo|ancora|quell[aeoi]|in pi[uù]|se non si)\b")
+_TAGLIO = re.compile(r"\s*(?:[.;!?]+\s+|\s+e poi\s+|\s+inoltre\s+|\s+invece\s+|,\s+e\s+(?=quando|appena|ogni|alle|al tramonto|all'alba)|\s+e\s+(?=quando|appena|ogni volta|al tramonto|all'alba)|,\s+(?=quando|appena|ogni volta|al tramonto|all'alba|alle\s+\d)|\s+(?=quando\s))\s*", re.I)
+
+
+def scomponi(prompt):
+    """Divide una richiesta lunga in richieste indipendenti (ognuna con un proprio 'quando' e una propria azione).
+    Non divide se la seconda parte si riferisce alla prima (spegnila, la stessa, ...) o non ha un proprio trigger.
+    Ritorna una lista (1 elemento = niente da dividere)."""
+    p = prompt.strip()
+    if len(p) < 40:
+        return [p]
+    pezzi = [re.sub(r"[\s,]+(e\s+)?poi$", "", x.strip(" ,"), flags=re.I) for x in _TAGLIO.split(p) if x and x.strip(" ,")]
+    if len(pezzi) < 2:
+        return [p]
+    out = [pezzi[0]]
+    for x in pezzi[1:]:
+        lx = x.lower()
+        ok = _AZIONE.search(lx) and _QUANDO.search(lx) and not _ANAFORA.search(lx) and len(lx) >= 12
+        prec = out[-1].lower()
+        if ok and _AZIONE.search(prec) and _QUANDO.search(prec):
+            out.append(x)
+        else:
+            out[-1] = out[-1] + (" " if out[-1][-1:] in ".;!?" else ", ") + x
+    return out[:4] if len(out) > 1 else [p]
+
+
+def unisci(risultati):
+    """risultati: lista di dict di generate(). Ritorna il YAML unito (automazioni separate da ---) e i problemi con prefisso [n]."""
+    ys, pr = [], []
+    for i, r in enumerate(risultati, 1):
+        if r.get("error"):
+            pr.append("[%d] non riuscita: %s" % (i, r["error"]))
+            ys.append("# Automazione %d: non riuscita" % i)
+            continue
+        ys.append("# Automazione %d\n%s" % (i, r.get("yaml", "")))
+        pr += ["[%d] %s" % (i, x) for x in r.get("problems", [])]
+    return "\n---\n".join(ys), pr
+
+
+# ---------- modifica di un'automazione esistente ----------
+SYSTEM_MOD = SYSTEM + " Se ricevi un'automazione attuale e una modifica, restituisci l'automazione completa modificata, cambiando solo cio che e chiesto."
+_GIORNI = [(r"feriali|dal lunedi al venerdi|nei giorni lavorativi", ["mon", "tue", "wed", "thu", "fri"]), (r"weekend|fine settimana|sabato e domenica", ["sat", "sun"]),
+           (r"tranne la domenica|non la domenica", ["mon", "tue", "wed", "thu", "fri", "sat"]), (r"solo il lunedi", ["mon"]), (r"solo il martedi", ["tue"]),
+           (r"solo il mercoledi", ["wed"]), (r"solo il giovedi", ["thu"]), (r"solo il venerdi", ["fri"]), (r"solo il sabato", ["sat"]), (r"solo la domenica", ["sun"])]
+
+
+def modifica_regole(y, istr):
+    """Modifiche semplici senza modello: orario, giorni, luminosita, togli condizioni. Ritorna (yaml, descrizione) o None."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    lp = istr.lower().replace("ì", "i").replace("è", "e")
+    novita = []
+    # togli le condizioni
+    if re.search(r"\b(togli|elimina|rimuovi|cancella)\b.*\bcondizion|senza condizion|deve scattare sempre|parta sempre", lp) and cfg.get("conditions"):
+        cfg["conditions"] = []; novita.append("condizioni tolte")
+    else:
+        # giorni
+        for pat, g in _GIORNI:
+            if re.search(pat, lp) and re.search(r"solo|tranne|feriali|weekend|giorni|aggiungi|limita", lp):
+                cond = [c for c in (cfg.get("conditions") or []) if not (isinstance(c, dict) and c.get("condition") == "time" and "weekday" in c)]
+                cond.append({"condition": "time", "weekday": g}); cfg["conditions"] = cond; novita.append("giorni"); break
+        # luminosita
+        m = re.search(r"(?:luminosit\w*|intensit\w*|al|a)\s*(?:del|al|a)?\s*(\d{1,3})\s*(?:%|per ?cento|percento)", lp)
+        if m and 0 < int(m.group(1)) <= 100:
+            n = [0]
+
+            def lum(a):
+                if a.get("action") == "light.turn_on":
+                    a.setdefault("data", {})["brightness_pct"] = int(m.group(1)); n[0] += 1
+                return a
+            cfg["actions"] = _passi(cfg.get("actions"), lum)
+            if n[0]: novita.append("luminosita")
+        # orario
+        ora = _ora(lp)
+        tr = [t for t in (cfg.get("triggers") or []) if isinstance(t, dict) and t.get("trigger") == "time"]
+        if ora and len(tr) == 1 and re.search(r"orario|alle|sposta|anticip|posticip|cambia|fallo|metti", lp) and str(tr[0].get("at")) != ora:
+            tr[0]["at"] = ora; novita.append("orario")
+    if not novita:
+        return None
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n"), ", ".join(novita)
+
+
+# ---------- firma strutturale (per il voto tra nodi) e controlli finali ----------
+def firma(y):
+    """Struttura normalizzata di un'automazione: insieme di trigger e di (servizio, bersagli). Serve a confrontare risposte di nodi diversi."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return None
+    if not isinstance(cfg, dict):
+        return None
+
+    def ents(t):
+        e = (t or {}).get("entity_id") if isinstance(t, dict) else None
+        return tuple(sorted(e if isinstance(e, list) else [e])) if e else ()
+    trig = sorted((str(t.get("trigger")), ents(t), str(t.get("at") or t.get("event") or t.get("to") or t.get("above") or t.get("below") or ""))
+                  for t in (cfg.get("triggers") or []) if isinstance(t, dict))
+    acts = []
+    _passi(cfg.get("actions") or [], lambda a: (acts.append((str(a.get("action", "")), ents(a.get("target")), json.dumps(a.get("data", {}), sort_keys=True))) if "action" in a else None, a)[1])
+    return json.dumps([trig, sorted(acts), len(cfg.get("conditions") or [])], sort_keys=True)
+
+
+def controlla_jinja(y):
+    """Se l'automazione contiene template {{ }} / {% %}, ne controlla la sintassi (se jinja2 c'e). Ritorna una lista di problemi."""
+    if "{{" not in y and "{%" not in y:
+        return []
+    try:
+        import jinja2
+    except Exception:
+        return []
+    p = []
+    for blocco in re.findall(r"(\{\{.*?\}\}|\{%.*?%\})", y, re.S):
+        try:
+            jinja2.Environment().parse(blocco)
+        except Exception as e:
+            p.append("template non valido %s: %s" % (blocco[:40], str(e)[:60]))
+    return p
+
+
+def unisci_stesso_trigger(risultati):
+    """Se due parti producono automazioni con gli stessi trigger e nessuna condizione diversa, le fonde in una (azioni in sequenza).
+    risultati: lista di dict di generate(). Ritorna la lista con i dict fusi (YAML dump deterministico)."""
+    out, visti = [], {}
+    for r in risultati:
+        if r.get("error") or not r.get("yaml"):
+            out.append(r); continue
+        try:
+            cfg = yaml.safe_load(r["yaml"])
+            chiave = json.dumps([cfg.get("triggers"), cfg.get("conditions") or []], sort_keys=True, default=str)
+        except Exception:
+            out.append(r); continue
+        if chiave in visti and isinstance(cfg.get("actions"), list):
+            base = visti[chiave]
+            bc = yaml.safe_load(base["yaml"])
+            bc["actions"] = (bc.get("actions") or []) + [a for a in cfg["actions"] if a not in (bc.get("actions") or [])]
+            base["yaml"] = yaml.safe_dump(bc, allow_unicode=True, sort_keys=False).rstrip("\n")
+            base["problems"] = list(dict.fromkeys(base.get("problems", []) + r.get("problems", [])))
+        else:
+            visti[chiave] = r; out.append(r)
+    return out
+
+
+# ---------- grammatica (llama.cpp GBNF): il modello puo scrivere solo entita e servizi dell'elenco ----------
+SERVIZI_BASE = ["light.turn_on", "light.turn_off", "light.toggle", "switch.turn_on", "switch.turn_off", "switch.toggle", "cover.open_cover", "cover.close_cover", "cover.stop_cover",
+                "cover.set_cover_position", "fan.turn_on", "fan.turn_off", "climate.set_temperature", "climate.set_hvac_mode", "climate.turn_on", "climate.turn_off",
+                "media_player.turn_on", "media_player.turn_off", "media_player.media_play", "media_player.media_pause", "media_player.volume_set", "lock.lock", "lock.unlock",
+                "vacuum.start", "vacuum.pause", "vacuum.stop", "vacuum.return_to_base", "scene.turn_on", "script.turn_on", "input_boolean.turn_on", "input_boolean.turn_off",
+                "alarm_control_panel.alarm_arm_away", "alarm_control_panel.alarm_arm_home", "alarm_control_panel.alarm_disarm", "tts.speak", "persistent_notification.create",
+                "humidifier.turn_on", "humidifier.turn_off", "automation.trigger", "homeassistant.turn_on", "homeassistant.turn_off"]
+CHIAVI_OK = ("alias description mode id triggers trigger event event_type at to from for hours minutes seconds above below offset value_template conditions condition state after before "
+             "weekday zone actions data target brightness_pct brightness rgb_color color_temp_kelvin position temperature hvac_mode message title volume_level media_content_id "
+             "delay choose conditions sequence default if then else repeat count while until wait_template wait_for_trigger timeout continue_on_timeout variables type "
+             "attribute entity_ids device_class area_id floor_id label_id use_blueprint path input platform domain service fan_mode preset_mode transition effect").split()
+
+
+def _esc(x):
+    return x.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def grammatica(entita, servizi_extra=()):
+    """GBNF per llama.cpp: entity_id solo dall'elenco, action solo da servizi noti (+ notify.* presenti), chiavi note, valori senza identificatori inventati (lettera.lettera)."""
+    ent = " | ".join('"%s"' % _esc(e) for e in sorted(set(entita))) or '"zone.home"'
+    notify = ["%s" % e for e in entita if e.startswith("notify.")]
+    svc = " | ".join('"%s"' % _esc(s) for s in sorted(set(SERVIZI_BASE) | set(notify) | set(servizi_extra)))
+    chiavi = " | ".join('"%s"' % k for k in sorted(set(CHIAVI_OK)))
+    return "\n".join([
+        'root ::= "```yaml\\n" line+ "```"',
+        'line ::= ind (entkv | entitem | actkv | kv | item) "\\n"',
+        'ind ::= " "*',
+        'entkv ::= ("- ")? "entity_id:" (" " (ent | "[" ent (", " ent)* "]"))?',
+        'entitem ::= "- " ent',
+        'actkv ::= ("- ")? "action: " svc',
+        'kv ::= ("- ")? key ":" (" " val)?',
+        'item ::= "- " val',
+        "ent ::= " + ent,
+        "svc ::= " + svc,
+        "key ::= " + chiavi,
+        'val ::= vchar+ "."?',
+        'vchar ::= [^\\n.] | "." [0-9 ]',
+        ""])
+
+
+_VAL = re.compile(r"^(?:[^\n.]|\.[0-9 ])+\.?$")
+
+
+def grammatica_accetta(y, entita, servizi_extra=()):
+    """Stesso criterio della grammatica, in Python (per provarla sui dati senza llama.cpp)."""
+    ents, svc = set(entita), set(SERVIZI_BASE) | {e for e in entita if e.startswith("notify.")} | set(servizi_extra)
+    for riga in y.strip("\n").split("\n"):
+        t = riga.lstrip(" ")
+        if not t:
+            return False
+        if t.startswith("- "):
+            r = t[2:]
+            if r in ents:
+                continue
+        else:
+            r = t
+        m = re.match(r"^([A-Za-z_]+):(?: (.*))?$", r)
+        if m:
+            k, v = m.group(1), m.group(2)
+            if k == "entity_id":
+                if v is None or v in ents or (v.startswith("[") and v.endswith("]") and all(x in ents for x in v[1:-1].split(", "))):
+                    continue
+                return False
+            if k == "action":
+                if v in svc:
+                    continue
+                return False
+            if k not in CHIAVI_OK:
+                return False
+            if v is None or _VAL.match(v):
+                continue
+            return False
+        if t.startswith("- ") and _VAL.match(r):
+            continue
+        return False
+    return True
+
+
+# ---------- 0.3.28: riparazioni dopo il modello ----------
+SERVIZI_DOMINIO = {
+    "number": {"set_value", "increment", "decrement"},
+    "select": {"select_option", "select_first", "select_last", "select_next", "select_previous"},
+    "light": {"turn_on", "turn_off", "toggle"}, "switch": {"turn_on", "turn_off", "toggle"},
+    "cover": {"open_cover", "close_cover", "stop_cover", "set_cover_position", "toggle", "open_cover_tilt", "close_cover_tilt", "set_cover_tilt_position"},
+    "fan": {"turn_on", "turn_off", "toggle", "set_percentage", "oscillate", "set_preset_mode", "set_direction"},
+    "tts": {"speak", "cloud_say", "google_translate_say"},
+    "input_boolean": {"turn_on", "turn_off", "toggle"}, "scene": {"turn_on", "apply"},
+    "script": {"turn_on", "turn_off", "toggle", "reload"}, "button": {"press"}, "input_button": {"press"},
+    "climate": {"set_hvac_mode", "set_temperature", "turn_on", "turn_off", "set_preset_mode", "set_fan_mode", "set_humidity", "toggle"},
+    "humidifier": {"turn_on", "turn_off", "toggle", "set_humidity", "set_mode"},
+}
+_LUCE_DATA = ("brightness_pct", "brightness", "color_name", "rgb_color", "color_temp", "color_temp_kelvin", "kelvin", "transition")
+
+
+def _luce_simile(eid, states):
+    """light.* con l'object_id piu simile (prefisso comune piu lungo) a un'entita di altro dominio."""
+    oid = eid.split(".", 1)[1] if "." in eid else eid
+    best, lb = None, 0
+    for s_ in states:
+        e = s_["entity_id"]
+        if not e.startswith("light."):
+            continue
+        o = e.split(".", 1)[1]
+        n = len(os.path.commonprefix([o, oid]))
+        if n > lb and n >= min(len(o), 8):
+            best, lb = e, n
+    return best
+
+
+def _luci_stanza(states, lp):
+    out = []
+    for g in ROOMS + [{"ingresso"}, {"corridoio"}]:
+        parole = [w for w in g if re.search(r"\b%s\b" % w, lp)]
+        if not parole:
+            continue
+        for s_ in states:
+            t = _t(s_)
+            if any(w in t for w in g) and is_light_like(s_["entity_id"], t) and not _altra_stanza(t, lp, parole[0]):
+                out.append(s_["entity_id"])
+    out.sort(key=lambda e: not e.startswith("light."))
+    return out
+
+
+def ripara(y, states, prompt, notify_ok=()):
+    """Corregge errori tipici del modello senza richiamarlo. Ritorna (yaml, avvisi)."""
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y, []
+    if not isinstance(cfg, dict):
+        return y, []
+    lp = prompt.lower()
+    avv, mod = [], [False]
+    noti = [n for n in notify_ok if n.startswith("notify.")]
+    mobili = [n for n in noti if n.startswith("notify.mobile_app_")]
+
+    def passo(a):
+        s = str(a.get("action", "")) if isinstance(a, dict) else ""
+        if "." not in s:
+            return a
+        dom, srv = s.split(".", 1)
+        # notify con alias anonimo o servizio che non esiste in casa
+        if dom == "notify" and noti and s not in noti:
+            nuovo = mobili[0] if len(mobili) == 1 and re.search(r"telefon|cellular|smartphone|avvisami|notific", lp) else ("notify.notify" if "notify.notify" in noti else (mobili or noti)[0])
+            avv.append("servizio di notifica %s non esiste in casa: messo %s, controlla" % (s, nuovo))
+            a["action"] = nuovo; mod[0] = True
+            return a
+        if dom == "notify" and re.match(r"e\d+$", srv):
+            avv.append("servizio di notifica %s non risolto: messo notify.notify, scegli quello del tuo telefono" % s)
+            a["action"] = "notify.notify"; mod[0] = True
+            return a
+        ok = SERVIZI_DOMINIO.get(dom)
+        if ok is None or srv in ok:
+            return a
+        data = a.get("data") or {}
+        tg = (a.get("target") or {}).get("entity_id")
+        tgl = tg if isinstance(tg, list) else [tg] if tg else []
+        if any(k in data for k in _LUCE_DATA):
+            luci = [l for l in (_luce_simile(e, states) for e in tgl if isinstance(e, str)) if l]
+            if luci:
+                avv.append("servizio %s non esiste: uso light.turn_on su %s" % (s, ", ".join(luci)))
+                a["action"] = "light.turn_on"; a["target"] = {"entity_id": luci if len(luci) > 1 else luci[0]}; mod[0] = True
+                return a
+        avv.append("servizio inesistente tolto: %s" % s); mod[0] = True
+        return None
+    if isinstance(cfg.get("actions"), list):
+        cfg["actions"] = _passi(cfg["actions"], passo)
+        if not cfg["actions"]:
+            avv.append("nessuna azione valida rimasta: riformula la richiesta")
+    # pioggia: il trigger deve essere il meteo
+    meteo = [s_["entity_id"] for s_ in states if s_["entity_id"].startswith("weather.")]
+    trig = cfg.get("triggers") if isinstance(cfg.get("triggers"), list) else []
+    if meteo and re.search(r"\b(se|quando|appena)\s+(inizia a\s+)?piov|\bse c'?\s?e pioggia|\bquando c'?\s?e pioggia", lp) \
+            and not any("weather." in str(t) for t in trig) and not re.search(r"\balle\s+\d|tramonto|alba|\b(esco|torno|arriv)", lp):
+        cfg["triggers"] = [{"trigger": "state", "entity_id": meteo[0], "to": "rainy"}]
+        avv.append("trigger messo sul meteo (%s diventa pioggia)" % meteo[0]); mod[0] = True
+    # chiede una luce ma il modello ha usato la TV
+    if re.search(r"\bluc[ei]\b|\blampad", lp) and not re.search(r"\btv\b|televis", lp):
+        luci = _luci_stanza(states, lp)
+        if luci:
+            def via_tv(x):
+                return isinstance(x, str) and re.search(r"(^|[._])tv([._]|$)|televis", x)
+            for t in trig:
+                if isinstance(t, dict) and via_tv(t.get("entity_id")):
+                    avv.append("il trigger usava %s ma chiedi una luce: messo %s" % (t["entity_id"], luci[0])); t["entity_id"] = luci[0]; mod[0] = True
+            for a in cfg.get("actions") or []:
+                if isinstance(a, dict) and isinstance(a.get("target"), dict) and via_tv(a["target"].get("entity_id")):
+                    e = luci[0]
+                    a["action"] = _dom(e) + "." + str(a.get("action", ".turn_off")).split(".", 1)[1]
+                    a["target"] = {"entity_id": e}; mod[0] = True
+                    avv.append("l'azione usava la TV ma chiedi una luce: messo %s" % e)
+    # "le luci del salotto" (plurale): tutte le luci della stanza, non una sola
+    if re.search(r"\b(le|tutte le) luci (del|della|dello|dell'|in)\s*\w+", lp) and not re.search(r"tranne|eccetto|tutte le luci\b(?! (del|della|dell))", lp):
+        luci = _luci_stanza(states, lp)
+        if len(luci) > 1:
+            for a in cfg.get("actions") or []:
+                if not isinstance(a, dict) or not re.match(r"(light|switch)\.turn_(on|off)$", str(a.get("action", ""))):
+                    continue
+                tg = (a.get("target") or {}).get("entity_id")
+                tgl = tg if isinstance(tg, list) else [tg] if tg else []
+                if tgl and set(tgl) < set(luci):
+                    verbo = a["action"].split(".")[1]
+                    sw = [e for e in luci if e.startswith("switch.")]
+                    li = [e for e in luci if e.startswith("light.")]
+                    nuove = []
+                    if li:
+                        nuove.append({"action": "light." + verbo, "target": {"entity_id": li if len(li) > 1 else li[0]}})
+                    if sw:
+                        nuove.append({"action": "switch." + verbo, "target": {"entity_id": sw if len(sw) > 1 else sw[0]}})
+                    i = cfg["actions"].index(a)
+                    cfg["actions"][i:i + 1] = nuove
+                    avv.append("\"le luci\" della stanza: messe tutte (%d)" % len(luci)); mod[0] = True
+                    break
+    if mod[0]:
+        y = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+    return y, avv
