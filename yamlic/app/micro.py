@@ -17,7 +17,7 @@ _V = r"(?:ri)?(?:accend|spegn|apr|chiud)\w*|alz\w+|abbass\w+"
 _NOTIFICA = r"(?:avvisami|avvertimi|notificami|(?:mandami|inviami|manda|invia)\s+(?:una\s+)?notifica(?:\s+(?:sul|al)\s+(?:mio\s+)?(?:telefono|cellulare))?)"
 _ANNUNCIO = r"(?:annuncia|annunciami|di'|dillo|fai dire)"
 # dove si puo tagliare: virgole/punti, "poi", e "e/ma" solo se dopo viene un verbo o un nuovo quando/se
-_INIZIO = r"(?:(?:%s)\b|%s\b|%s\b|quando\b|appena\b|se\b|alle\b|all'|al tramonto|a mezz|dopo\b|poi\b|\d+ minuti (?:prima|dopo))" % (_V, _NOTIFICA, _ANNUNCIO)
+_INIZIO = r"(?:(?:metti|imposta|porta)\b|(?:%s)\b|%s\b|%s\b|quando\b|appena\b|se\b|alle\b|all'|al tramonto|a mezz|dopo\b|poi\b|\d+ minuti (?:prima|dopo))" % (_V, _NOTIFICA, _ANNUNCIO)
 _TAGLIO = re.compile(r"(?<!\d)[.;!?]+(?!\d)\s*|,\s*(?:(?:e|ma)\s+)?(?:poi\s+)?|\s+(?:e|ed|ma)\s+poi\s+|\s+poi\s+|\s+(?:e|ed|ma|mentre|invece)\s+(?=%s)" % _INIZIO)
 # parole che si possono ignorare senza perdere significato
 VUOTE = set("""il lo la i gli le l un uno una di del dello della dei degli delle d in nel nello nella nei nelle a al allo alla ai agli alle
@@ -272,6 +272,18 @@ def evento(testo, casa, io, avv):
     if re.fullmatch(r"(?:inizia a piovere|piove|comincia a piovere)", t):
         w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
         return fine({"trigger": "state", "entity_id": w[0], "to": ["rainy", "pouring"]}) if w else None
+    m = re.fullmatch(r"(?:apro|apre|si apre|viene aperto|qualcuno apre) (?:il |la )?(cancello|portone|garage)|(?:il |la )?(cancello|portone|garage) (?:si apre|viene aperto)", t)
+    if m:
+        cosa = m.group(1) or m.group(2)
+        sw = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "switch" and casa.vivo(s) and _n(casa.nome(s["entity_id"])) == cosa]
+        porta = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) in ("cover", "binary_sensor") and casa.vivo(s) and cosa in casa.testo(s)
+                 and casa.classe(s) in ("gate", "garage", "garage_door", "door", "opening")]
+        if len(porta) == 1:
+            return fine({"trigger": "state", "entity_id": porta[0], "to": "open" if porta[0].startswith("cover.") else "on"})
+        if len(sw) != 1:
+            return None
+        avv.append("il %s e un comando a impulso: scatta quando il comando parte da Home Assistant, non sa se si e aperto davvero (non vede il telecomando)" % cosa)
+        return fine({"trigger": "state", "entity_id": sw[0], "to": "on"})
     m = re.fullmatch(r"(?:la |il )?(lavatrice|lavastoviglie|asciugatrice) (?:finisce|ha finito|termina|ha terminato)(?: il (?:ciclo|lavaggio))?(?: di lavare| di asciugare)?", t)
     if m:
         pot = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "sensor" and m.group(1) in casa.testo(s)
@@ -456,7 +468,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
                 avv.append("\"resta acceso dopo le...\": scatta solo quando la durata si completa nella fascia oraria. Se era gia acceso da prima non parte")
         if m:
             corpo = m.group(1)
-            cmd = re.search(r"(?<!si )\b(?:(?:%s)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
+            cmd = re.search(r"(?<!si )\b(?!(?:apro|apre|chiudo|chiude|accendo|accende|spengo|spegne)\b)(?:(?:%s)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
             if cmd and re.match(r"si (?:accende|spegne|apre|chiude)", corpo):
                 cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
             testo_ev = corpo[:cmd.start()] if cmd else corpo
@@ -535,6 +547,21 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             if not txt or len(nominati) != 1:
                 return None
             azioni.append({"action": "assist_satellite.announce", "target": {"entity_id": nominati[0]["entity_id"]}, "data": {"message": txt}})
+        elif re.search(r"\bvolume\b", seg) and re.search(r"\d{1,3}", seg):
+            mvol = re.search(r"\b(?:metti|imposta|porta|abbassa|alza|regola)\b", seg)
+            mn_ = re.search(r"\b(?:al|a)\s+(\d{1,3})\s*(?:%|per ?cento)?", seg) or re.search(r"(\d{1,3})\s*(?:%|per ?cento)", seg)
+            if not mvol or not mn_ or int(mn_.group(1)) > 100:
+                return None
+            resto = _togli(_togli(seg, mn_), mvol) if mn_.start() > mvol.start() else _togli(_togli(seg, mvol), mn_)
+            parole = [w for w in _resto(resto) if w not in ("volume",)]
+            cand = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "media_player" and casa.vivo(s_)
+                    and parole and all(re.search(r"\b%s\b" % w, casa.testo(s_)) for w in parole)]
+            if len(cand) > 1:   # nome piu corto = quello detto
+                avv.append("piu dispositivi per il volume (%s): controlla il bersaglio" % ", ".join(casa.nome(e) for e in cand))
+                cand = sorted(cand, key=len)[:1]
+            if not cand:
+                return None
+            azioni.append({"action": "media_player.volume_set", "target": {"entity_id": cand[0]}, "data": {"volume_level": int(mn_.group(1)) / 100}})
         else:
             mv = re.search(r"\b(%s)\b" % _V, seg)
             if mv:

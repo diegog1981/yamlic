@@ -108,6 +108,22 @@ def controlla(prompt, y, states):
         for e in sorted(set(ids)):
             if e.startswith("sensor.") and re.search(r"batter|cpu|chip|processor", micro._n(e + " " + ((known.get(e, {}).get("attributes") or {}).get("friendly_name") or ""))):
                 err.append("%s e la temperatura di un dispositivo (batteria o processore), non di una stanza" % e)
+    # la grandezza chiesta deve venire da un sensore di quel tipo
+    for parola, classe in (("temperatura", "temperature"), ("umidita", "humidity")):
+        if not re.search(r"\b%s\b" % parola, q):
+            continue
+        for n in tutti:
+            if (n.get("trigger") == "numeric_state" or n.get("condition") == "numeric_state"):
+                for e in _lista(n.get("entity_id")):
+                    a = known.get(e, {}).get("attributes") or {}
+                    if str(e).startswith("sensor.") and a.get("device_class") != classe and not (classe == "temperature" and str(a.get("unit_of_measurement", "")).startswith("°")) and parola not in micro._n(str(e)):
+                        err.append("%s non e un sensore di %s: se in casa non ce n'e uno adatto, l'automazione non si puo fare" % (e, parola))
+    # "quando apro il cancello": il trigger deve riguardare il cancello
+    m = re.search(r"\b(?:quando|appena|se)\b[^,.]{0,25}\b(cancello|portone|garage|portoncino)\b", q)
+    if m and not any(m.group(1) in micro._n(str(e) + " " + micro.Casa(states).nome(e)) for t in trig for e in _lista(t.get("entity_id"))) and not any(t.get("trigger") == "event" for t in trig):
+        err.append("il trigger deve riguardare il %s" % m.group(1))
+    if re.search(r"\bvolume\b", q) and "media_player.volume_set" not in servizi and not re.search(r"\b(alza|abbassa) il volume", q):
+        err.append("manca la regolazione del volume (media_player.volume_set)")
     # orari
     orari_yaml = {str(t.get("at"))[:5].zfill(5) for t in trig if t.get("trigger") == "time"}
     for n in tutti:
@@ -199,4 +215,17 @@ def controlla(prompt, y, states):
             err.append("le luci di '%s' sono %s e non sono tra i bersagli" % (m.group(1), ", ".join(sorted(delle))))
         elif delle and "tranne" not in q and re.search(r"tutte\s+(?:le\s+)?(?:luc|farett)", m.group(0)) and not delle <= bers:
             err.append("mancano alcune luci di '%s': %s" % (m.group(1), ", ".join(sorted(delle - bers))))
+    # solo "luci del X" nella richiesta: nessuna luce di altre stanze fra i bersagli
+    stanze_rx = r"\b(?:luc[ei]|faretti)\s+(?:del|dello|della|dell'|in|nel|nella)\s*(%s)\b" % "|".join(micro.STANZE)
+    dette = re.findall(stanze_rx, q)
+    altro = re.sub(stanze_rx, " ", q)
+    if dette and not re.search(r"\b(?:luc[ei]|faretti|lampad\w*|led|striscia|barra|presa|tutto|ingresso|corridoio)\b|tranne|eccetto", altro):
+        casa = micro.Casa(states)
+        ammesse = {e for r in dette for e in casa.luci([r])}
+        if ammesse:
+            for a in comandi:
+                if a["action"].split(".")[0] in ("light", "switch"):
+                    for e in _lista((a.get("target") or {}).get("entity_id")):
+                        if e not in ammesse:
+                            err.append("%s non e una luce di '%s'" % (e, "' o '".join(dette)))
     return list(dict.fromkeys(err))
