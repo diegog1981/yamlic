@@ -928,7 +928,7 @@ def parlato(p):
                    (r"^(.*?\b(?:avvisami|notificami|avvertimi)(?: (?:sul|al) (?:mio )?(?:telefono|cellulare))?)\s+(?:alla |per la |la )?fine (?:del |della |dello )?(?:ciclo |lavaggio |programma )?(?:della |del )?(lavatrice|lavastoviglie|asciugatrice)\b", r"quando la \2 finisce \1"),
                    (r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
                    (r"\ball'una\b(?! e)", "alle 1:00"), (r"\bal calar del sole\b", "al tramonto"), (r"\bmentre\b", "solo se"), (r"\be (?:sono )?(?=dopo le \d)", " "), (r"\bcon scritto\b", "che"), (r"\bmezz'ora\b", "30 minuti"), (r"\ba mezzanotte e mezz[ao]\b", "alle 0:30"),
-                   (r"\b(?:quando )?(?:fa|si fa) buio\b(?= (?:accend|spegn|apr|chiud|alz|abbass))", "al tramonto"),
+                   (r"\b(?:quando |appena |non appena )?(?:fa|si fa) buio\b(?= (?:accend|spegn|apr|chiud|alz|abbass))", "al tramonto"),
                    (r"\b(?:tranne|escluso|eccetto) (?:il |nel )?(?:weekend|fine settimana)\b", "nei giorni feriali"),
                    (r"\bfa(?:i|llo|lla) ripartire\b", "riavvialo"), (r"\bfai partire\b", "avvia"),
                    (r"\b(?:la mattina|di mattina|tutte le mattine)\b(?= alle)", " "),
@@ -1046,6 +1046,8 @@ def rifai_entita(casa, testo, out, avv):
     import json as _j
     testo_out = _j.dumps(out)
     for e in sorted(set(re.findall(r'"([a-z_]+\.[a-z0-9_]+)"', testo_out))):
+        if e.startswith(("input_number.", "input_select.", "input_text.", "input_datetime.", "number.", "select.", "text.", "update.", "tts.", "stt.", "event.")) and e in casa.by:
+            return None   # impostazioni: non sono eventi ne condizioni; l'AI le ha inventate
         if e in ("zone.home", "sun.sun") or e.startswith(("person.", "weather.")) or e not in casa.by:
             continue
         ids, _ = bersagli(testo, casa, [])   # puo fare domanda se la scelta e dubbia
