@@ -230,7 +230,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.42"
+VERSIONE = "0.3.43"
 _RETE = {"t": 0, "v": None}
 
 
@@ -301,7 +301,7 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
         return None
     if "domanda" in r:
         d = r["domanda"]
-        if str(d.get("chiave", "")).startswith("riscrivi:") and not d.get("opzioni") and flag("proposta_ai", True):
+        if str(d.get("chiave", "")).startswith("riscrivi:") and not d.get("opzioni") and str(d.get("testo", "")).startswith("Non ho capito") and flag("proposta_ai", True):
             _proponi(d, prompt, states, persona)
         return {"domanda": d, "risposte": risposte or {}}
     errori = [] if r.get("fisso") else verifica.controlla(r["frase"], r["yaml"], states)

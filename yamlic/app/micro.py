@@ -620,6 +620,12 @@ _MODI = ("piano", "lentamente", "gradualmente", "dolcemente", "delicatamente", "
 
 def significato(p, casa):
     """Parole con piu significati: si chiede, non si sceglie in silenzio."""
+    m = re.fullmatch(r"(?:lascia|tieni) (.+?) acces[aoei] (?:di sera|la sera|tutta la sera|stasera)", p)
+    if m:
+        cosa = m.group(1)
+        raise Domanda("riscrivi:" + p, "\"La sera\": da quando a quando?",
+                      [{"valore": {"testo": "al tramonto accendi %s e %s spegni %s" % (cosa, quando_, cosa)}, "nome": nome_, "dettaglio": ""}
+                       for quando_, nome_ in (("alle 23", "Dal tramonto alle 23"), ("alle 0", "Dal tramonto a mezzanotte"), ("all'alba", "Dal tramonto all'alba"))], riscrivi=True)
     if not re.search(r"\d|tramonto|\balba\b|mezzanotte|mezzogiorno|quando|appena|\bbuio\b", p):
         for rx, testo, scelte in ((r"\b(?:tutte le sere|la sera|di sera|stasera)\b", "la sera", (("al tramonto", "al tramonto"), ("alle 20", "alle 20"), ("alle 22", "alle 22"))),
                                   (r"\b(?:tutte le mattine|la mattina|di mattina)\b", "la mattina", (("all'alba", "all'alba"), ("alle 7", "alle 7"), ("alle 8", "alle 8")))):
