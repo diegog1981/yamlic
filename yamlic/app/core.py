@@ -1910,3 +1910,67 @@ def pezzo_errori(tipo, y, testo, states):
 def pezzo_estrai(tipo, y):
     parti = _parti(y, tipo)
     return (parti, []) if tipo == "evento" else parti
+
+
+# ================= 0.4.10: due letture a confronto =================
+def _parti_firma(y):
+    try:
+        docs = [d for d in yaml.safe_load_all(y or "") if isinstance(d, dict)]
+    except Exception:
+        return None
+    if not docs:
+        return None
+    tr, co, az = set(), set(), set()
+
+    def ents(x):
+        return tuple(sorted(str(e) for e in _ents(x.get("entity_id")) + _ents((x.get("target") or {}).get("entity_id"))))
+
+    def cond(c):
+        if not isinstance(c, dict):
+            return
+        if c.get("condition") in ("and", "or", "not"):
+            for x in c.get("conditions") or []:
+                cond(x)
+        elif c.get("condition") != "trigger":
+            co.add((c.get("condition"), ents(c), str(c.get("state", "")) if c.get("entity_id") == "sun.sun" else ""))
+
+    def azioni(lst):
+        for a in lst or []:
+            if not isinstance(a, dict):
+                continue
+            if "action" in a:
+                az.add((a["action"], ents(a)))
+            for c in _lista_c(a.get("if")):
+                cond(c)
+            azioni(a.get("then")); azioni(a.get("else"))
+            for ch in a.get("choose") or []:
+                for c in _lista_c(ch.get("conditions")):
+                    cond(c)
+                azioni(ch.get("sequence"))
+    for d in docs:
+        for t in d.get("triggers") or []:
+            if isinstance(t, dict):
+                tr.add((t.get("trigger"), ents(t), str(t.get("event") or t.get("at") or t.get("to") or ("sopra" if "above" in t else "sotto" if "below" in t else ""))))
+        for c in d.get("conditions") or []:
+            cond(c)
+        azioni(d.get("actions"))
+    return tr, co, az
+
+
+def _lista_c(x):
+    return x if isinstance(x, list) else [x] if isinstance(x, dict) else []
+
+
+def confronta(y_regole, y_ai):
+    """uguale | dispositivi (stessa struttura, entita diverse) | struttura | ai_assente"""
+    a, b = _parti_firma(y_regole), _parti_firma(y_ai)
+    if not b:
+        return "ai_assente", []
+    if a == b:
+        return "uguale", []
+    senza = lambda p: tuple(sorted((x[0],) + tuple(x[2:]) for x in s) for s in p)
+    diff = []
+    for nome, x, y in zip(("eventi", "condizioni", "azioni"), a, b):
+        if x != y:
+            diff.append("%s: regole %s / AI %s" % (nome, sorted(x - y), sorted(y - x)))
+    return ("dispositivi" if senza(a) == senza(b) else "struttura"), diff

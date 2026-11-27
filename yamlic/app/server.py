@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.9"
+VERSIONE = "0.4.10"
 _RETE = {"t": 0, "v": None}
 
 
@@ -559,13 +559,20 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
     return out
 
 
-def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=None, salta_micro=False):
+def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=None, salta_micro=False, doppia=False):
     proposta = next((v for v in (risposte or {}).values() if isinstance(v, dict) and v.get("yaml_ai")), None) if isinstance(risposte, dict) else None
     if proposta:
         r = {"yaml": str(proposta["yaml_ai"])[:6000], "problems": ["automazione proposta dall'AI e scelta da te: rileggila"], "segn": None,
              "stats": {"secondi": 0, "via": "proposta AI", "token_risposta": None, "correzioni": 0}}
     else:
         r = _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro)
+    if r.get("yaml") and (doppia or flag("doppia_lettura", False)) and ((r.get("stats") or {}).get("via") or "").startswith("regole locali"):
+        try:   # seconda lettura: l'AI legge la frase da sola (per ora solo misura, il risultato non cambia)
+            ai = _genera_uno(prompt, None, persona, True, stati)
+            esito, diff = core.confronta(r["yaml"], ai.get("yaml") or "")
+            r["doppia"] = {"esito": esito, "diff": diff, "ai_yaml": ai.get("yaml"), "ai_errore": ai.get("error"), "secondi": (ai.get("stats") or {}).get("secondi")}
+        except Exception as ex:
+            r["doppia"] = {"esito": "errore", "diff": [str(ex)[:120]]}
     if r.get("yaml"):
         usate = [e for v in (risposte or {}).values() if isinstance(v, dict) for e in (v.get("entita") or [])] + list(scelte or [])
         tutti = {x["entity_id"]: x for x in _stati(stati, grezzi=True)}
@@ -837,6 +844,12 @@ class H(BaseHTTPRequestHandler):
                 if "sostituisci" in data:
                     memoria.correggi(data.get("sostituisci"))
                 self._send(200, vista_casa())
+            elif self.path.endswith("/api/prova_doppia"):   # misura: piu frasi su una casa finta, nessuna modifica a Home Assistant
+                out = []
+                for f in (data.get("frasi") or [])[:10]:
+                    r = generate(str(f), salta=True, stati=data.get("stati"), doppia=True)
+                    out.append({"frase": f, "yaml": r.get("yaml"), "domanda": bool(r.get("domanda")), "errore": r.get("error"), "doppia": r.get("doppia")})
+                self._send(200, {"risultati": out})
             elif self.path.endswith("/api/modifica"):
                 self._send(200, modifica(data))
             elif self.path.endswith("/api/segnala"):
