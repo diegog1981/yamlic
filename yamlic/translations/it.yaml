@@ -50,6 +50,12 @@ configuration:
   ripara:
     name: Ripara errori del modello
     description: Corregge da solo servizi inesistenti, notifiche non risolte, luci scambiate con la TV, trigger della pioggia, stanza sbagliata.
+  micro:
+    name: "Micro-frasi"
+    description: "Divide la richiesta in pezzi e li costruisce con regole in casa tua; l'AI serve solo per i pezzi non capiti."
+  correzioni:
+    name: "Correzioni con l'AI"
+    description: "Se il controllo finale trova errori, li rimanda al modello (al massimo 2 volte) e tiene la risposta migliore."
   ibrido:
     name: Controllo finale con il compilatore
     description: "Trasforma l'automazione in un piano, corregge entita inesistenti, soglie sul sensore sbagliato e azioni che ripetono il trigger, poi riscrive lo YAML pulito."

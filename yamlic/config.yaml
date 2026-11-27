@@ -1,5 +1,5 @@
 name: "Yamlic"
-version: "0.3.31"
+version: "0.3.32"
 slug: "yamlic"
 description: "Yaml Intelligent Creator: scrivi cosa vuoi in italiano, Yamlic scrive l'automazione per Home Assistant. Ogni installazione puo anche essere nodo o smistatore della rete."
 url: "https://github.com/diegog1981/yamlic"
@@ -36,6 +36,8 @@ options:
   voto_adattivo: true
   ripara: true
   ibrido: true
+  micro: true
+  correzioni: true
   grammatica: false
 schema:
   modo: "list(auto|locale|rete)"
@@ -56,4 +58,6 @@ schema:
   voto_adattivo: bool
   ripara: bool
   ibrido: bool
+  micro: bool
+  correzioni: bool
   grammatica: bool

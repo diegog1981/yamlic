@@ -4,7 +4,7 @@ import asyncio, json, os, re, threading, time, urllib.request
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import core, rete
+import core, micro, rete, verifica
 
 OPT = core.load_options()
 
@@ -145,6 +145,8 @@ def ha(path, data=None):
 
 RETE_LOCK = threading.Lock()
 DEBUG = threading.local()
+SENZA_GIRI = threading.local()   # le micro-frasi non fanno giri di correzione
+MAX_GIRI = 2
 _NOTIFY = {"t": 0, "d": []}
 
 
@@ -192,7 +194,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.31"
+VERSIONE = "0.3.32"
 _RETE = {"t": 0, "v": None}
 
 
@@ -219,17 +221,69 @@ def rete_info():
 
 
 # ---------- cliente ----------
-def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
+def _stati(stati):
     states = stati if isinstance(stati, list) and stati else ha("/states")   # stati: solo per le prove con case finte
     ar = {} if stati else aree()
     for st_ in states:
         if st_["entity_id"] in ar:
             st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
+    return states
+
+
+def _micro(prompt, stati):
+    """Strada a micro-frasi: tutto in locale; il modello riceve solo le azioni non capite. None = usa il metodo classico."""
+    states = _stati(stati)
+    t0 = time.time()
+    vie = []
+
+    def chiedi(frase):
+        SENZA_GIRI.on = True
+        try:
+            r = _genera_uno(frase, None, "", True, states, micro_chiamata=True)
+            cfg = yaml.safe_load(r.get("yaml") or "")
+            acts = cfg.get("actions") if isinstance(cfg, dict) else None
+            if not acts or not all(isinstance(a, dict) and "action" in a for a in acts):
+                return None
+            if verifica.controlla(frase, yaml.safe_dump({"triggers": [{"trigger": "state"}], "actions": acts}), states):
+                return None
+            vie.append(r["stats"]["via"])
+            return acts
+        except Exception:
+            return None
+        finally:
+            SENZA_GIRI.on = False
+    io = OPT.get("io_person") or ""
+    try:
+        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi)
+    except Exception as ex:
+        print("micro: errore %s" % str(ex)[:120], flush=True)
+        return None
+    if not r:
+        return None
+    errori = verifica.controlla(prompt, r["yaml"], states)
+    if errori:   # il controllo finale non passa: meglio il metodo classico
+        return None
+    known = {s_["entity_id"] for s_ in states}
+    y, imp = core.impulsi(r["yaml"])
+    problems = core.validate(y, known, prompt, remote=False) + r["avvisi"] + imp + core.domini_mancanti(states, prompt)
+    try:
+        an = core.Anon(core.select_entities(states, prompt, io)[0], prompt, [(s_.get("attributes") or {}).get("friendly_name", "") for s_ in states])
+        segn = {"prompt": an.prompt, "yaml": an.forward_yaml(y), "problems": [an.forward_yaml(x) for x in problems]}
+    except Exception:
+        segn = None
+    via = "regole locali" + (" + " + ", ".join(sorted(set(vie))) if vie else "")
+    return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": True, "errori": []},
+            "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": None, "correzioni": 0}}
+
+
+def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_chiamata=False):
+    states = stati if micro_chiamata else _stati(stati)
     io = persona or OPT.get("io_person") or ""
     if not scelte and not salta and not persona:
         dom = core.ambiguity(states, prompt, io)
         if dom:
             return {"domanda": dom}
+    intera = prompt
     coda = None if scelte else core.coda_condizionale(prompt, states)
     if coda:
         prompt, coda_az, coda_av = coda
@@ -290,28 +344,73 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
             return {"error": "rete non disponibile: %s%s" % (ex, (" / locale: " + err) if err else "")}
     if res is None:
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
+    def correggi(y0):
+        """Regole dopo il modello. Rete di sicurezza: se un passaggio peggiora il confronto con la richiesta, viene scartato."""
+        y, tolte = core.clean(y0, known)
+        avvisi = []
+        if coda:   # la coda costruita con regole fa parte del risultato anche per il controllo
+            pieno = lambda z: core.aggiungi_azione(z, coda_az)
+        else:
+            pieno = lambda z: z
+
+        def voto(z):
+            return len(verifica.controlla(intera, pieno(z), states))
+
+        def passo(f):
+            nonlocal y
+            r = f(y)
+            nuovo, av = r if isinstance(r, tuple) else (r, [])
+            if nuovo != y and voto(nuovo) > voto(y):
+                return
+            y = nuovo
+            avvisi.extend(av)
+        passo(lambda z: core.force_targets(z, scelte or [], prompt, known))
+        passo(lambda z: core.fill_empty(z, states, prompt))
+        if not scelte:
+            for f in (core.room_guard, core.nome_esatto, core.tranne, core.trigger_da_testo):
+                passo(lambda z, f=f: f(z, states, prompt))
+        passo(lambda z: core.via_pausa(z, prompt))
+        passo(core.impulsi)
+        passo(lambda z: core.regole_028(z, prompt))
+        if flag("ripara", True):
+            passo(lambda z: core.ripara(z, states, prompt, [] if stati else servizi_notify()))
+        if flag("ibrido", True):
+            passo(lambda z: core.ibrido(z, states, prompt))
+        passo(lambda z: verifica.ripulisci(intera, z, states))
+        if coda:
+            y = pieno(y)
+            avvisi.append(coda_av)
+        return y, tolte, avvisi
+
     grezzo = y
-    y, tolte = core.clean(y, known)
-    y = core.force_targets(y, scelte or [], prompt, known)
-    y = core.fill_empty(y, states, prompt)
-    if not scelte:
-        y = core.room_guard(y, states, prompt)
-        y = core.nome_esatto(y, states, prompt)
-        y = core.tranne(y, states, prompt)
-        y = core.trigger_da_testo(y, states, prompt)
-    y = core.via_pausa(y, prompt)
-    y, avvisi = core.impulsi(y)
-    y, av28 = core.regole_028(y, prompt)
-    avvisi = avvisi + av28
-    if flag("ripara", True):
-        y, avr = core.ripara(y, states, prompt, [] if stati else servizi_notify())
-        avvisi = avvisi + avr
-    if flag("ibrido", True):
-        y, avi = core.ibrido(y, states, prompt)
-        avvisi = avvisi + avi
-    if coda:
-        y = core.aggiungi_azione(y, coda_az)
-        avvisi = avvisi + [coda_av]
+    y, tolte, avvisi = correggi(y)
+    errori = verifica.controlla(intera, y, states)
+    giri = 0
+    # domanda e risposta: rimando al modello gli errori precisi (massimo 2 correzioni, tengo la migliore)
+    testo_prec = text_of(res)
+    while errori and giri < MAX_GIRI and not scelte and flag("correzioni", True) and not getattr(SENZA_GIRI, "on", False):
+        giri += 1
+        nota = "L'automazione ha questi errori:\n- %s\nRiscrivi tutta l'automazione corretta per la stessa richiesta. Solo YAML." % "\n- ".join(errori[:5])
+        try:
+            msgs = payload["messages"] if via != "locale" else req["messages"]
+            nuovi = msgs[:2] + [{"role": "assistant", "content": testo_prec}, {"role": "user", "content": anon.forward_yaml(nota) if anon else nota}]
+            if anon and anon.leaks(nuovi[-1]["content"]):
+                break
+            if via != "locale":
+                with RETE_LOCK:
+                    r2, node2 = asyncio.run(rete.ask(IDENT, RELAYS, dict(payload, messages=nuovi, temperature=0.1 + 0.2 * giri), accept=accept, direct=flag("diretto"), ice=ICE))
+            else:
+                r2 = llm_call(dict(req, messages=nuovi))
+            testo_prec = text_of(r2)
+            y2 = core.extract_yaml(testo_prec)
+            if anon:
+                y2 = anon.restore(y2)
+            y2, tolte2, avvisi2 = correggi(y2)
+            err2 = verifica.controlla(intera, y2, states)
+        except Exception:
+            break
+        if len(err2) < len(errori):
+            y, tolte, avvisi, errori = y2, tolte2, avvisi2, err2
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))
@@ -333,14 +432,24 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
         segn = {"prompt": an.prompt, "yaml": an.forward_yaml(y), "problems": [an.forward_yaml(p) for p in problems]}
     except Exception:
         segn = None
-    out = {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+    problems += ["controllo finale: %s" % e for e in errori]
+    out = {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens"), "correzioni": giri},
+           "controllo": {"ok": not errori, "errori": errori}}
     if getattr(DEBUG, "on", False):
         out["grezzo"] = grezzo
     return out
 
 
 def generate(prompt, scelte=None, persona="", salta=False, stati=None):
-    """Richieste lunghe con piu 'quando' indipendenti: divise in parti, generate in parallelo e riunite (automazioni separate)."""
+    """Prima le micro-frasi (regole locali). Se non bastano: metodo classico; richieste con piu 'quando' indipendenti divise in parti."""
+    if flag("micro", True) and not scelte and not persona:
+        if not salta:
+            dom = core.ambiguity(_stati(stati), prompt, OPT.get("io_person") or "")
+            if dom:
+                return {"domanda": dom}
+        r = _micro(prompt, stati)
+        if r:
+            return r
     parti = core.scomponi(prompt) if (flag("scomponi", True) and not scelte and not persona) else [prompt]
     if len(parti) < 2:
         return _genera_uno(prompt, scelte, persona, salta, stati)
@@ -367,6 +476,10 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None):
         list(yaml.safe_load_all(y))
     except Exception:
         pr.append("il YAML unito non e valido, controllalo")
+    try:   # controllo finale sull'insieme
+        pr += ["controllo finale (insieme): %s" % e for e in verifica.controlla(prompt, y, _stati(stati))]
+    except Exception:
+        pass
     ok = [r for r in ris if r.get("stats")]
     via = ", ".join(sorted({r["stats"]["via"] for r in ok})) or "-"
     return {"segn": (ok[0].get("segn") if ok else None), "yaml": y, "problems": ["richiesta divisa in %d automazioni, controllale una per una" % len(parti)] + pr,

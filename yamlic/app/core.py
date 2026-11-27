@@ -920,7 +920,7 @@ def merge_entities(y):
 
 # ---------- validatore ----------
 TRIGGERS = {"state", "numeric_state", "time", "time_pattern", "sun", "homeassistant", "event", "zone", "template", "device"}
-SERVICES = {
+SERVICES = {"assist_satellite": {"announce"},
     "light": {"turn_on", "turn_off", "toggle"}, "switch": {"turn_on", "turn_off", "toggle"},
     "cover": {"open_cover", "close_cover", "stop_cover", "set_cover_position", "toggle"},
     "climate": {"set_hvac_mode", "set_temperature", "turn_on", "turn_off"},
@@ -934,7 +934,7 @@ SENSITIVE = {"lock", "alarm_control_panel"}
 SENSITIVE_WORDS = ("serratur", "allarm", "blocca", "sblocca", "lock", "disinser", "inser", "arma", "chiud", "apri")
 STATE_TO = {"person": {"home", "not_home"}, "binary_sensor": {"on", "off"}, "light": {"on", "off"},
             "switch": {"on", "off"}, "input_boolean": {"on", "off"}, "lock": {"locked", "unlocked"},
-            "cover": {"open", "closed"}, "media_player": {"on", "off", "playing", "paused", "idle"}}
+            "cover": {"open", "closed"}, "media_player": {"on", "off", "playing", "paused", "idle", "standby"}}
 OLD_KEYS = {"platform", "service"}
 BLUEPRINTS = {"homeassistant/motion_light.yaml": {"motion_entity", "light_target", "no_motion_wait"}}
 
@@ -994,7 +994,7 @@ def validate(y, known, prompt="", remote=False):
                     p.append("entita inesistente: %s" % e)
             if kind == "state":
                 to, dom = t.get("to"), _dom(es[0]) if es else ""
-                if to is not None and dom in STATE_TO and str(to) not in STATE_TO[dom]:
+                if to is not None and dom in STATE_TO and any(str(v) not in STATE_TO[dom] for v in (to if isinstance(to, list) else [to])):
                     p.append("stato '%s' non valido per %s" % (to, es[0]))
             else:
                 if "above" not in t and "below" not in t:
