@@ -651,6 +651,11 @@ def evento(testo, casa, io, avv):
             return None
         avv.append("robot fermo = passa da pulizia a pausa, errore o inattivo (il rientro normale alla base non conta)")
         return fine({"trigger": "state", "entity_id": rb[0], "from": "cleaning", "to": ["paused", "error", "idle"]})
+    if re.fullmatch(r"(?:il )?(?:robot|aspirapolvere)(?: aspirapolvere)? (?:torna|rientra|arriva|e' tornato|e' rientrato|e' arrivato) (?:alla|in|a) base", t):
+        rb = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "vacuum" and casa.vivo(s)]
+        if len(rb) != 1:
+            return None
+        return fine({"trigger": "state", "entity_id": rb[0], "to": "docked"})
     if re.fullmatch(r"(?:il )?(?:robot|aspirapolvere)(?: aspirapolvere)? (?:ha finito|finisce|ha terminato|termina)(?: di pulire| la pulizia| le pulizie)?", t):
         rb = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "vacuum" and casa.vivo(s)]
         if len(rb) != 1:
@@ -920,7 +925,7 @@ def tempi(seg):
     mm = re.search(r"\b(?:il|ogni) (%s) e (?:il |la )?(%s)\b" % ("|".join(GIORNI_IT), "|".join(GIORNI_IT)), seg)
     if mm and not giorni:
         giorni, seg = [GIORNI_IT[mm.group(1)], GIORNI_IT[mm.group(2)]], _togli(seg, mm)
-    m = re.search(r"\b(?:ogni|il|la|solo il|solo la)\s+(%s)\b" % "|".join(GIORNI_IT), seg)
+    m = re.search(r"\b(?:ogni|il|la|solo il|solo la|di)\s+(%s)\b" % "|".join(GIORNI_IT), seg)
     if m and not giorni:
         giorni, seg = [GIORNI_IT[m.group(1)]], _togli(seg, m)
     return tr, cond, giorni, seg
@@ -999,6 +1004,8 @@ def parlato(p):
     p = re.sub(r"\bun'ora\b", "1 ora", p)
     p = re.sub(r"\b(resta|rimane) (acces[ao]|apert[ao]) ((?:il |la |l').+?) per (?:piu' di |piu di |oltre |almeno )?(\d+) (second\w|minut\w|ora|ore)\b", r"\3 \1 \2 per \4 \5", p)
     p = re.sub(r"\bfa(?:i)? (?:tornare|rientrare) (il robot|l'aspirapolvere) (?:alla|in) base\b", r"riporta \1 alla base", p)
+    if re.search(r"\b(?:robot|aspirapolvere)\b", p):
+        p = re.sub(r"\b(?:rimanda|riporta|manda)(?:lo|la) (?:alla|in) base\b", "rimanda il robot alla base", p)
     p = re.sub(r"\bguardo la (tv|televisione)\b", r"accendo la \1", p)
     p = re.sub(r"\bescono tutti\b", "tutti escono", p)
     if re.search(r"\b(?:quando|appena)\b|\bse (?:rimane|resta)\b", p):
