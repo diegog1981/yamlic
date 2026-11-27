@@ -310,6 +310,11 @@ def fix_domains(y):
     out, changed = [], False
     for a in cfg["actions"]:
         svc = str(a.get("action", "")) if isinstance(a, dict) else ""
+        ents_v = _target_ents(a) if isinstance(a, dict) else []
+        if ents_v and all(isinstance(e, str) and e.startswith("valve.") for e in ents_v) and svc.split(".", 1)[-1] in {"turn_on", "turn_off", "open_cover", "close_cover", "open", "close"}:
+            nuovo = "open_valve" if svc.split(".", 1)[-1] in {"turn_on", "open_cover", "open"} else "close_valve"
+            a = dict(a); a["action"] = "valve." + nuovo
+            changed = True
         if svc.startswith("light.") and svc.split(".", 1)[1] in {"turn_on", "turn_off", "toggle"}:
             ents = _target_ents(a)
             sw = [e for e in ents if isinstance(e, str) and e.startswith("switch.")]
@@ -933,6 +938,7 @@ def merge_entities(y):
 # ---------- validatore ----------
 TRIGGERS = {"state", "numeric_state", "time", "time_pattern", "sun", "homeassistant", "event", "zone", "template", "device"}
 SERVICES = {"assist_satellite": {"announce"}, "homeassistant": {"toggle", "turn_on", "turn_off"},
+    "valve": {"open_valve", "close_valve", "stop_valve", "set_valve_position", "toggle"},
     "light": {"turn_on", "turn_off", "toggle"}, "switch": {"turn_on", "turn_off", "toggle"},
     "cover": {"open_cover", "close_cover", "stop_cover", "set_cover_position", "toggle"},
     "climate": {"set_hvac_mode", "set_temperature", "turn_on", "turn_off"},

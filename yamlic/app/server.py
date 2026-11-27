@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.21"
+VERSIONE = "0.4.22"
 _RETE = {"t": 0, "v": None}
 
 
@@ -667,6 +667,17 @@ def _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro):
     if flag("micro", True) and not scelte and not salta_micro:
         r = _micro(prompt, stati, risposte if isinstance(risposte, dict) else None, persona, flag("domande", True))
         if r:
+            d = r.get("domanda") or {}
+            if d and (d.get("riscrivi") or str(d.get("chiave", "")).startswith("riscrivi:")) and not d.get("opzioni") and not risposte and flag("ai_intera", True):
+                # le regole e l'AI sul pezzo non bastano: prima di chiedere all'utente, l'AI sull'intera frase con il controllo finale
+                try:
+                    r2 = _genera_uno(prompt, scelte, persona, salta, stati)
+                except Exception as ex:
+                    print("AI intera: %s" % str(ex)[:120], flush=True)
+                    r2 = None
+                if r2 and r2.get("yaml") and not r2.get("error") and not r2.get("domanda"):
+                    r2.setdefault("stats", {})["via"] = "AI sull'intera frase (le regole non bastavano)"
+                    return r2
             return r
     parti = core.scomponi(prompt) if (flag("scomponi", True) and not scelte and not persona) else [prompt]
     if len(parti) < 2:
