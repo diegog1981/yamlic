@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.7"
+VERSIONE = "0.4.8"
 _RETE = {"t": 0, "v": None}
 
 
@@ -568,7 +568,9 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=
         r = _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro)
     if r.get("yaml"):
         usate = [e for v in (risposte or {}).values() if isinstance(v, dict) for e in (v.get("entita") or [])] + list(scelte or [])
-        motivi = core.blocco(r["yaml"], prompt + " " + " ".join(str((v or {}).get("testo") or "") for v in (risposte or {}).values() if isinstance(v, dict)), _stati(stati, grezzi=True), usate)
+        tutti = {x["entity_id"]: x for x in _stati(stati, grezzi=True)}
+        tutti.update({x["entity_id"]: x for x in _stati(stati, prompt)})   # con le tue scelte (stanza, cos'e, soprannome)
+        motivi = core.blocco(r["yaml"], prompt + " " + " ".join(str((v or {}).get("testo") or "") for v in (risposte or {}).values() if isinstance(v, dict)), list(tutti.values()), usate)
         if ((r.get("stats") or {}).get("via") or "") != "regole locali" and not usate and not core.coerente(r["yaml"], prompt):
             motivi.append("l'automazione non corrisponde a quello che hai chiesto")
         if motivi and not (usate and all("non c'entra" in m for m in motivi)):
