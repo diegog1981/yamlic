@@ -114,6 +114,15 @@ function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.re
  $('no').onclick=()=>$('pv').classList.add('hide');
  $('ok').onclick=async()=>{$('ok').disabled=true;try{const x=await (await fetch('api/segnala',{method:'POST',body:JSON.stringify({segn:j.segn,via:(j.stats||{}).via,nota:$('nt').value})})).json();$('pm').textContent=x.ok?'Inviata, grazie':(x.error||'errore');if(x.ok)setTimeout(()=>$('pv').classList.add('hide'),1500)}catch(e){$('pm').textContent='errore'}$('ok').disabled=false};
  $('sv').onclick=async()=>{const x=await (await fetch('api/create',{method:'POST',body:JSON.stringify({yaml:j.yaml})})).json();$('msg').textContent=x.ok?'Salvata in Home Assistant':(x.error||'errore')}}
+function domandaMicro(d,fatte){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
+ let h='<b>'+esc(d.testo)+'</b>';
+ d.opzioni.forEach((o,i)=>{h+='<label><input type='+(d.multi?'checkbox':'radio')+' class=ck name=o value='+i+'><span>'+esc(o.nome)+(o.dettaglio?'<br><span class=id>'+esc(o.dettaglio)+'</span>':'')+'</span></label>'});
+ if(d.riscrivi)h+='<div class=row><input id=rs style="flex:1;min-width:12em;font:inherit;padding:.55em;border-radius:10px;border:1px solid var(--bd);background:var(--code);color:var(--tx)" placeholder="'+(d.opzioni.length?'oppure riscrivi il pezzo':'riscrivi il pezzo')+'"></div>';
+ h+='<div class=row><button id=ok type=button>Continua</button><button class=s type=button id=sk>Nessuna: prova senza domande</button></div>';q.innerHTML=h;
+ $('ok').onclick=()=>{const t=d.riscrivi?$('rs').value.trim():'';const s=[...q.querySelectorAll('.ck:checked')].map(c=>d.opzioni[+c.value].valore);let v=null;
+  if(t)v={testo:t};else if(s.length){const a=s.find(x=>x.azioni);v=a?a:{entita:s.flatMap(x=>x.entita)}}
+  if(v)gen({risposte:Object.assign({},fatte,{[d.chiave]:v})})};
+ $('sk').onclick=()=>gen({salta_micro:true});q.scrollIntoView({behavior:'smooth',block:'nearest'})}
 function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
  let h='<b>'+esc(d.testo)+'</b>';
  if(d.tipo=='uno'){h+=d.opzioni.map((o,i)=>'<label><input type=radio name=o value="'+esc(o.id)+'"'+(i==0?' checked':'')+'><span>'+esc(o.nome)+'<br><span class=id>'+esc(o.id)+'</span></span></label>').join('')}
@@ -124,10 +133,10 @@ function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remo
  if(d.tipo!='uno'){$('ta').onclick=()=>document.querySelectorAll('.ck').forEach(c=>c.checked=true);$('tn').onclick=()=>document.querySelectorAll('.ck').forEach(c=>c.checked=false)}
  $('ok').onclick=()=>{if(d.tipo=='uno'){gen({persona:document.querySelector('input[name=o]:checked').value})}
   else{const s=[...document.querySelectorAll('.ck')].filter(c=>c.checked).map(c=>c.value);if(!s.length){return gen({salta:true})}gen({scelte:s})}};
- $('sk').onclick=()=>gen({salta:true});q.scrollIntoView({behavior:'smooth',block:'nearest'})}
+ $('sk').onclick=()=>gen({salta:true,salta_micro:true});q.scrollIntoView({behavior:'smooth',block:'nearest'})}
 async function gen(extra){if(busy||!$('p').value.trim())return;busy=true;$('b').disabled=true;$('s').innerHTML='<span class=sp></span>Sto scrivendo...';
  try{const r=await fetch('api/generate',{method:'POST',body:JSON.stringify(Object.assign({prompt:$('p').value},extra||{}))});const j=await r.json();
-  if(j.domanda)domanda(j.domanda);else risultato(j)}catch(e){risultato({error:'Errore di comunicazione: '+e})}
+  if(j.domanda)(j.domanda.tipo=='micro'?domandaMicro(j.domanda,j.risposte||{}):domanda(j.domanda));else risultato(j)}catch(e){risultato({error:'Errore di comunicazione: '+e})}
  busy=false;$('b').disabled=false;$('s').textContent=''}
 $('b').onclick=()=>gen();$('p').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))gen()});
 reteInfo();setInterval(reteInfo,30000);
@@ -194,7 +203,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.36"
+VERSIONE = "0.3.37"
 _RETE = {"t": 0, "v": None}
 
 
@@ -230,7 +239,7 @@ def _stati(stati):
     return states
 
 
-def _micro(prompt, stati):
+def _micro(prompt, stati, risposte=None, persona="", domande=False):
     """Strada a micro-frasi: tutto in locale; il modello riceve solo le azioni non capite. None = usa il metodo classico."""
     states = _stati(stati)
     t0 = time.time()
@@ -252,17 +261,20 @@ def _micro(prompt, stati):
             return None
         finally:
             SENZA_GIRI.on = False
-    io = OPT.get("io_person") or ""
+    io = persona or OPT.get("io_person") or ""
     try:
-        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi)
+        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi, risposte, domande)
     except Exception as ex:
         print("micro: errore %s" % str(ex)[:120], flush=True)
         return None
     if not r:
         return None
-    errori = verifica.controlla(prompt, r["yaml"], states)
-    if errori:   # il controllo finale non passa: meglio il metodo classico
+    if "domanda" in r:
+        return {"domanda": r["domanda"], "risposte": risposte or {}}
+    errori = verifica.controlla(r["frase"], r["yaml"], states)
+    if errori and not risposte:   # il controllo finale non passa: meglio il metodo classico
         return None
+    r["avvisi"] += ["controllo finale: " + e for e in errori]   # con le tue scelte: te lo dico, non butto via
     known = {s_["entity_id"] for s_ in states}
     y, imp = core.impulsi(r["yaml"])
     problems = core.validate(y, known, prompt, remote=False) + r["avvisi"] + imp + core.domini_mancanti(states, prompt)
@@ -272,7 +284,7 @@ def _micro(prompt, stati):
     except Exception:
         segn = None
     via = "regole locali" + (" + " + ", ".join(sorted(set(vie))) if vie else "")
-    return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": True, "errori": []},
+    return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": not errori, "errori": errori},
             "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": None, "correzioni": 0}}
 
 
@@ -440,14 +452,10 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
     return out
 
 
-def generate(prompt, scelte=None, persona="", salta=False, stati=None):
+def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=None, salta_micro=False):
     """Prima le micro-frasi (regole locali). Se non bastano: metodo classico; richieste con piu 'quando' indipendenti divise in parti."""
-    if flag("micro", True) and not scelte and not persona:
-        if not salta:
-            dom = core.ambiguity(_stati(stati), prompt, OPT.get("io_person") or "")
-            if dom:
-                return {"domanda": dom}
-        r = _micro(prompt, stati)
+    if flag("micro", True) and not scelte and not salta_micro:
+        r = _micro(prompt, stati, risposte if isinstance(risposte, dict) else None, persona, flag("domande", True))
         if r:
             return r
     parti = core.scomponi(prompt) if (flag("scomponi", True) and not scelte and not persona) else [prompt]
@@ -605,7 +613,7 @@ class H(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n) or b"{}")
             if self.path.endswith("/api/generate"):
                 DEBUG.on = bool(data.get("debug"))
-                self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati")))
+                self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati"), data.get("risposte"), bool(data.get("salta_micro"))))
             elif self.path.endswith("/api/modifica"):
                 self._send(200, modifica(data))
             elif self.path.endswith("/api/segnala"):

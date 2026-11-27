@@ -53,6 +53,9 @@ configuration:
   micro:
     name: "Micro-sentences"
     description: "Splits the request into parts and builds them locally with rules (Italian only)."
+  domande:
+    name: Questions on unclear parts
+    description: When part of the request is unclear, Yamlic asks you and offers choices.
   correzioni:
     name: "AI corrections"
     description: "If the final check finds errors, they are sent back to the model (up to 2 times) and the best answer is kept."

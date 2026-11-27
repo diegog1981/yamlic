@@ -53,6 +53,9 @@ configuration:
   micro:
     name: "Micro-frasi"
     description: "Divide la richiesta in pezzi e li costruisce con regole in casa tua; l'AI serve solo per i pezzi non capiti."
+  domande:
+    name: Domande sui pezzi dubbi
+    description: Se un pezzo della richiesta non e chiaro, Yamlic ti fa una domanda e propone le scelte.
   correzioni:
     name: "Correzioni con l'AI"
     description: "Se il controllo finale trova errori, li rimanda al modello (al massimo 2 volte) e tiene la risposta migliore."
