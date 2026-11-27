@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.23"
+VERSIONE = "0.4.24"
 _RETE = {"t": 0, "v": None}
 
 
@@ -676,6 +676,13 @@ def _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro):
                     print("AI intera: %s" % str(ex)[:120], flush=True)
                     r2 = None
                 if r2 and r2.get("yaml") and not r2.get("error") and not r2.get("domanda"):
+                    try:   # stesso controllo di sicurezza che fa generate() dopo: se non regge, resta la domanda mirata
+                        tutti = {x["entity_id"]: x for x in _stati(stati, grezzi=True)}
+                        tutti.update({x["entity_id"]: x for x in _stati(stati, prompt)})
+                        if core.blocco(r2["yaml"], prompt, list(tutti.values()), []) or not core.coerente(r2["yaml"], prompt):
+                            return r
+                    except Exception:
+                        return r
                     r2.setdefault("stats", {})["via"] = "AI sull'intera frase (le regole non bastavano)"
                     return r2
             return r
