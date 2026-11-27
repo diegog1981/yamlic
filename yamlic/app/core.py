@@ -234,7 +234,7 @@ STOP = set("quando spegni accendi accendere spegnere chiudi apri alle della dell
 def _t(s):
     """Testo su cui si cercano stanze e parole: id + nome + area di Home Assistant."""
     a = s.get("attributes") or {}
-    return (s["entity_id"] + " " + (a.get("friendly_name") or "") + " " + (a.get("_area") or "")).lower().replace("_", " ")
+    return (s["entity_id"] + " " + (a.get("friendly_name") or "") + " " + (a.get("_area") or "") + " " + (a.get("_soprannome") or "")).lower().replace("_", " ")
 
 def _nm(s):
     return (s.get("attributes") or {}).get("friendly_name", "") or s["entity_id"]

@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import core, micro, rete, verifica
 import mappa
+import memoria, racconto
 
 OPT = core.load_options()
 
@@ -65,10 +66,12 @@ pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overf
 <textarea id=p rows=3 placeholder="Scrivi cosa vuoi, per esempio: quando esco di casa spegni tutte le luci"></textarea>
 <div class=row><button id=b>Genera automazione</button><span id=s class=mu></span></div>
 </div>
+<div class=row><button id=cb class=s type=button>La tua casa</button></div>
+<div id=hm class="card q hide"></div>
 <div id=q class="card q hide"></div>
 <div id=r class="card hide">
 <div class=chips id=st></div>
-<pre id=y></pre>
+<div id=it class="warn hide" style="white-space:pre-wrap"></div><pre id=y></pre>
 <div class=row><button id=cp>Copia YAML</button><button id=cs class=s>Copia per segnalare</button><button id=iv class=s>Invia a Diego</button><button id=md class=s>Modifica</button><button id=sv class="s hide">Salva in Home Assistant</button><span id=msg class=mu></span></div>
 <div id=mb class="row hide"><input id=mi style="flex:1;min-width:12em;font:inherit;padding:.55em;border-radius:10px;border:1px solid var(--bd);background:var(--code);color:var(--tx)" placeholder="Cosa vuoi cambiare? (es. solo nei giorni feriali, luminosita al 40%)"><button id=mg>Applica</button></div>
 <div id=w></div>
@@ -98,6 +101,7 @@ function stats(j){const s=j.stats||{};const c=[];if(s.secondi!=null)c.push('<spa
  if(s.token_risposta&&s.secondi>0)c.push('<span class=chip><b>'+Math.round(s.token_risposta/s.secondi)+'</b> token/s</span>');
  $('st').innerHTML=c.join('')}
 function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.remove('hide');
+ $('it').textContent=j.riassunto||'';$('it').classList.toggle('hide',!j.riassunto);
  if(j.error){$('y').textContent='';$('st').innerHTML='';$('cp').classList.add('hide');$('cs').classList.add('hide');$('iv').classList.add('hide');$('sv').classList.add('hide');
   $('w').innerHTML='<div class="warn err">'+esc(j.error)+(j.problems?' ('+esc(j.problems.join(', '))+')':'')+'</div>';return}
  $('cp').classList.remove('hide');$('cs').classList.remove('hide');$('iv').classList.toggle('hide',!j.segn);$('pv').classList.add('hide');$('y').textContent=j.yaml||'';stats(j);
@@ -119,9 +123,10 @@ function domandaMicro(d,fatte){$('r').classList.add('hide');const q=$('q');q.cla
  let h='<b>'+esc(d.testo)+'</b>';
  d.opzioni.forEach((o,i)=>{h+='<label><input type='+(d.multi?'checkbox':'radio')+' class=ck name=o value='+i+'><span>'+esc(o.nome)+(o.dettaglio?'<br><span class=id>'+esc(o.dettaglio)+'</span>':'')+'</span></label>'});
  if(d.riscrivi)h+='<div class=row><input id=rs style="flex:1;min-width:12em;font:inherit;padding:.55em;border-radius:10px;border:1px solid var(--bd);background:var(--code);color:var(--tx)" placeholder="'+(d.opzioni.length?'oppure riscrivi il pezzo':'riscrivi il pezzo')+'"></div>';
+ if(d.ricorda)h+='<label><input type=checkbox id=rc checked><span>Ricorda questa scelta</span></label>';
  h+='<div class=row><button id=ok type=button>Continua</button><button class=s type=button id=sk>Nessuna: prova senza domande</button></div>';q.innerHTML=h;
  $('ok').onclick=()=>{const t=d.riscrivi?$('rs').value.trim():'';const s=[...q.querySelectorAll('.ck:checked')].map(c=>d.opzioni[+c.value].valore);let v=null;
-  if(t)v={testo:t};else if(s.length){const a=s.find(x=>x.azioni);v=a?a:{entita:s.flatMap(x=>x.entita)}}
+  const w=s.find(x=>x.testo);if(t)v={testo:t};else if(w)v=w;else if(s.length){const a=s.find(x=>x.azioni);v=a?a:{entita:s.flatMap(x=>x.entita)};if(!a&&d.ricorda&&$('rc').checked)v.ricorda=d.ricorda}
   if(v)gen({risposte:Object.assign({},fatte,{[d.chiave]:v})})};
  $('sk').onclick=()=>gen({salta_micro:true});q.scrollIntoView({behavior:'smooth',block:'nearest'})}
 function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
@@ -139,7 +144,28 @@ async function gen(extra){if(busy||!$('p').value.trim())return;busy=true;$('b').
  try{const r=await fetch('api/generate',{method:'POST',body:JSON.stringify(Object.assign({prompt:$('p').value},extra||{}))});const j=await r.json();
   if(j.domanda)(j.domanda.tipo=='micro'?domandaMicro(j.domanda,j.risposte||{}):domanda(j.domanda));else risultato(j)}catch(e){risultato({error:'Errore di comunicazione: '+e})}
  busy=false;$('b').disabled=false;$('s').textContent=''}
-$('b').onclick=()=>gen();$('p').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))gen()});
+$('b').onclick=()=>gen();
+const FUNZ=['','luce','presa','interruttore','elettrodomestico','tenda','TV','audio','cancello/portone','ventilatore'];
+const CAMPO='style="width:100%;font:inherit;padding:.4em;margin:.2em 0;border-radius:8px;border:1px solid var(--bd);background:var(--code);color:var(--tx)"';
+function scheda(v){const m=v.mia||{};return '<div class=ve data-id="'+esc(v.id)+'" style="border-top:1px solid var(--bd);padding:.5em 0"><b>'+esc(v.nome)+'</b><br><span class=id>'+esc(v.id)+'</span><br><span class=mu>'+esc(v.funzione||'')+(v.stanze&&v.stanze.length?' &middot; '+esc(v.stanze.join(', ')):'')+(v.dubbi&&v.dubbi.length?' &middot; <b>'+esc(v.dubbi.join('; '))+'</b>':'')+'</span>'
+ +'<select class=fz '+CAMPO+'>'+FUNZ.map(f=>'<option value="'+f+'"'+((m.funzione||'')==f?' selected':'')+'>'+(f||'cosa fa: automatico')+'</option>').join('')+'</select>'
+ +'<input class=sz '+CAMPO+' placeholder="stanza" value="'+esc(m.stanza||'')+'"><input class=sn '+CAMPO+' placeholder="come la chiami tu" value="'+esc(m.nome||'')+'">'
+ +'<label><input type=checkbox class=ig'+(m.ignora?' checked':'')+'><span>non usare</span></label></div>'}
+function mostraCasa(j){const h=$('hm');if(j.error){h.innerHTML=esc(j.error);return}
+ const dub=j.voci.filter(v=>v.stato=='dubbia'),altre=j.voci.filter(v=>v.stato!='dubbia');
+ let x='<b>La tua casa</b><p class=mu>Resta sul tuo Home Assistant. Compila solo quello che serve. Chiare: '+(j.conta.ok||0)+', dubbie: '+(j.conta.dubbia||0)+', tecniche nascoste: '+(j.conta.tecnica||0)+'.</p>';
+ x+='<div class=g>Da chiarire ('+dub.length+')</div>'+dub.map(scheda).join('')+'<details><summary>Tutte le altre ('+altre.length+')</summary>'+altre.map(scheda).join('')+'</details>';
+ if(j.memoria.length)x+='<div class=g>Scelte che ricordo</div>'+j.memoria.map(m=>'<div class=row><span>'+esc(m.testo)+' &rarr; '+esc(m.scelta)+'</span><button type=button class="s dm" data-k="'+esc(m.chiave)+'">Dimentica</button></div>').join('');
+ h.innerHTML=x+'<div class=row><button id=hs type=button>Salva</button><button id=hc type=button class=s>Chiudi</button><span id=hmsg class=mu></span></div>';
+ const prima={};h.querySelectorAll('.ve').forEach(d=>prima[d.dataset.id]=leggi(d));
+ $('hc').onclick=()=>h.classList.add('hide');
+ $('hs').onclick=async()=>{const ent={};h.querySelectorAll('.ve').forEach(d=>{const v=leggi(d);if(JSON.stringify(v)!=JSON.stringify(prima[d.dataset.id]))ent[d.dataset.id]=v});
+  mostraCasa(await casaApi({entita:ent}));$('hmsg')&&($('hmsg').textContent='Salvato')};
+ h.querySelectorAll('.dm').forEach(b=>b.onclick=async()=>mostraCasa(await casaApi({dimentica:b.dataset.k})))}
+function leggi(d){return {funzione:d.querySelector('.fz').value,stanza:d.querySelector('.sz').value.trim(),nome:d.querySelector('.sn').value.trim(),ignora:d.querySelector('.ig').checked}}
+async function casaApi(b){try{return await (await fetch(b?'api/casa':'api/mappa',b?{method:'POST',body:JSON.stringify(b)}:undefined)).json()}catch(e){return {error:'Errore: '+e}}}
+$('cb').onclick=async()=>{const h=$('hm');if(!h.classList.contains('hide')){h.classList.add('hide');return}h.classList.remove('hide');h.textContent='Leggo la casa...';mostraCasa(await casaApi())};
+$('p').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))gen()});
 reteInfo();setInterval(reteInfo,30000);
 </script></html>"""
 
@@ -204,7 +230,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.39"
+VERSIONE = "0.3.40"
 _RETE = {"t": 0, "v": None}
 
 
@@ -231,18 +257,21 @@ def rete_info():
 
 
 # ---------- cliente ----------
-def _stati(stati):
-    states = stati if isinstance(stati, list) and stati else ha("/states")   # stati: solo per le prove con case finte
+def _stati(stati, prompt="", grezzi=False):
+    prova = isinstance(stati, list) and bool(stati)
+    states = stati if prova else ha("/states")   # stati: solo per le prove con case finte
     ar = {} if stati else aree()
     for st_ in states:
         if st_["entity_id"] in ar:
             st_.setdefault("attributes", {})["_area"] = ar[st_["entity_id"]]
-    return states
+    if grezzi or not flag("mappa", True):
+        return states
+    return memoria.applica(states, {"entita": {}, "memoria": {}} if prova else memoria.carica(), prompt)
 
 
 def _micro(prompt, stati, risposte=None, persona="", domande=False):
     """Strada a micro-frasi: tutto in locale; il modello riceve solo le azioni non capite. None = usa il metodo classico."""
-    states = _stati(stati)
+    states = _stati(stati, prompt)
     t0 = time.time()
     vie = []
 
@@ -264,7 +293,7 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
             SENZA_GIRI.on = False
     io = persona or OPT.get("io_person") or ""
     try:
-        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi, risposte, domande)
+        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi, risposte, domande, None if stati else memoria.carica()["memoria"])
     except Exception as ex:
         print("micro: errore %s" % str(ex)[:120], flush=True)
         return None
@@ -290,7 +319,7 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
 
 
 def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_chiamata=False):
-    states = stati if micro_chiamata else _stati(stati)
+    states = stati if micro_chiamata else _stati(stati, prompt)
     io = persona or OPT.get("io_person") or ""
     if not scelte and not salta and not persona:
         dom = core.ambiguity(states, prompt, io)
@@ -454,6 +483,31 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
 
 
 def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=None, salta_micro=False):
+    r = _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro)
+    if r.get("yaml"):
+        try:
+            r["riassunto"] = racconto.racconta(r["yaml"], _stati(stati, grezzi=True))
+        except Exception:
+            pass
+        if not stati:
+            try:
+                memoria.ricorda(risposte)   # solo quando si arriva in fondo
+            except Exception as ex:
+                print("memoria: %s" % str(ex)[:100], flush=True)
+    return r
+
+
+def vista_casa():
+    voci = mappa.costruisci(_stati(None, grezzi=True))
+    d = memoria.carica()
+    nomi = {v["id"]: v["nome"] for v in voci}
+    out = mappa.riassunto(voci)
+    out["voci"] = [dict(v, mia=d["entita"].get(v["id"]) or {}) for v in voci if v["stato"] in ("ok", "dubbia") or v["id"] in d["entita"]]
+    out["memoria"] = [{"chiave": k, "testo": k.split(":", 1)[-1], "scelta": ", ".join(nomi.get(e, e) for e in v)} for k, v in d["memoria"].items()]
+    return out
+
+
+def _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro):
     """Prima le micro-frasi (regole locali). Se non bastano: metodo classico; richieste con piu 'quando' indipendenti divise in parti."""
     if flag("micro", True) and not scelte and not salta_micro:
         r = _micro(prompt, stati, risposte if isinstance(risposte, dict) else None, persona, flag("domande", True))
@@ -605,7 +659,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.split("?")[0].endswith("/api/mappa"):   # sola lettura
             try:
-                return self._send(200, mappa.riassunto(mappa.costruisci(_stati(None))))
+                return self._send(200, vista_casa())
             except Exception as ex:
                 return self._send(200, {"error": str(ex)[:200]})
         if self.path.split("?")[0].endswith("/api/rete"):
@@ -620,6 +674,12 @@ class H(BaseHTTPRequestHandler):
             if self.path.endswith("/api/generate"):
                 DEBUG.on = bool(data.get("debug"))
                 self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati"), data.get("risposte"), bool(data.get("salta_micro"))))
+            elif self.path.endswith("/api/casa"):
+                if "entita" in data:
+                    memoria.correggi(data.get("entita"))
+                if "dimentica" in data:
+                    memoria.dimentica(data.get("dimentica") or None)
+                self._send(200, vista_casa())
             elif self.path.endswith("/api/modifica"):
                 self._send(200, modifica(data))
             elif self.path.endswith("/api/segnala"):

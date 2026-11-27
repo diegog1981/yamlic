@@ -53,6 +53,9 @@ configuration:
   micro:
     name: "Micro-sentences"
     description: "Splits the request into parts and builds them locally with rules (Italian only)."
+  mappa:
+    name: Use the home map
+    description: Hides technical entities and uses your corrections from "La tua casa".
   domande:
     name: Questions on unclear parts
     description: When part of the request is unclear, Yamlic asks you and offers choices.

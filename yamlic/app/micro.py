@@ -70,9 +70,9 @@ _PER = r"(?:per|da)\s+(?:piu\s+di\s+|oltre\s+|almeno\s+)?(\d+|un|una|mezz')\s*(s
 # ---------- domande all'utente ----------
 class Domanda(Exception):
     """Un pezzo e dubbio: lo chiede Yamlic (non l'AI). La risposta torna in risposte[chiave]."""
-    def __init__(self, chiave, testo, opzioni=(), multi=False, riscrivi=False):
+    def __init__(self, chiave, testo, opzioni=(), multi=False, riscrivi=False, ricorda=""):
         super().__init__(testo)
-        self.d = {"tipo": "micro", "chiave": chiave, "testo": testo, "opzioni": list(opzioni), "multi": multi, "riscrivi": riscrivi}
+        self.d = {"tipo": "micro", "chiave": chiave, "testo": testo, "opzioni": list(opzioni), "multi": multi, "riscrivi": riscrivi, "ricorda": ricorda}
 
 
 _DOM_VERBO = {"turn_on": ("light", "switch", "fan", "media_player", "input_boolean"), "turn_off": ("light", "switch", "fan", "media_player", "input_boolean"),
@@ -92,7 +92,18 @@ def scegli(casa, chiave, testo, ids):
     r = [e for e in r or [] if e in ids]
     if r:
         return r
-    raise Domanda(chiave, testo, _opz(casa, ids), multi=True)
+    r = ricordata(casa, chiave, ids)
+    if r:
+        return r
+    raise Domanda(chiave, testo, _opz(casa, ids), multi=True, ricorda=chiave)
+
+
+def ricordata(casa, chiave, ids=None):
+    r = [e for e in casa.memoria.get(chiave) or [] if e in casa.by and (ids is None or e in ids)]
+    if r and len(r) == len(casa.memoria[chiave]):
+        casa.usata.append("uso la scelta che hai gia fatto: %s" % ", ".join(casa.nome(e) for e in r))
+        return r
+    return []
 
 
 def candidati(casa, frase, verbo):
@@ -124,6 +135,7 @@ class Casa:
         self.states = [s for s in states]
         self.by = {s["entity_id"]: s for s in states}
         self.risposte, self.domande, self.pezzo = {}, False, ""
+        self.memoria, self.usata = {}, []
         self.contesto = []   # stanza citata nel "quando": vale per "accendi i faretti"
 
     def testo(self, s):
@@ -162,7 +174,10 @@ class Casa:
                 continue
             t = core._t(s)
             solo_stanza = _n((s.get("attributes") or {}).get("friendly_name", "")).strip() in stanze   # interruttore chiamato come la stanza
-            if core.NOT_LIGHT.search(t) or (core._dom(e) == "switch" and not core.LIGHT_LIKE.search(t) and not solo_stanza):
+            detta = (s.get("attributes") or {}).get("_funzione")   # correzione dell'utente: vince sulle regole
+            if detta and detta != "luce":
+                continue
+            if not detta and (core.NOT_LIGHT.search(t) or (core._dom(e) == "switch" and not core.LIGHT_LIKE.search(t) and not solo_stanza)):
                 continue
             if stanze and not self._in_stanza(s, stanze, largo):
                 continue
@@ -205,6 +220,10 @@ class Casa:
                 continue
             nm = _n((s.get("attributes") or {}).get("friendly_name", "")).strip()
             corto = re.sub(r"\s+(?:%s)$" % "|".join(STANZE), "", nm)
+            sopr = _n((s.get("attributes") or {}).get("_soprannome", "")).strip()
+            if sopr and re.search(r"\b%s\b" % re.escape(sopr), frase):
+                hit.append((100 + len(sopr), s["entity_id"], sopr))
+                continue
             for n_ in dict.fromkeys([nm, corto]):
                 if len(n_) >= 5 and (n_ == nm or (len(n_.split()) >= 2 and not re.match(_COSE + r"\b", n_.split()[-1]))) and re.search(r"\b%s\b" % re.escape(n_), frase):
                     hit.append((len(n_), s["entity_id"], n_))
@@ -275,7 +294,11 @@ def bersagli(frase, casa, avv, verbo=None):
             if m_ and e not in ids:
                 ids.append(e); frase = _togli(frase, m_)
     esatti, nm = casa.per_nome(frase)
-    if esatti and len(nm.split()) >= 2 and not re.fullmatch(r"(?:tv|luc[ei]|tend[ae])\s+(?:%s)" % "|".join(STANZE), nm):
+    sopr = bool(esatti) and nm == _n((casa.by[esatti[0]].get("attributes") or {}).get("_soprannome", "")).strip()
+    if sopr:
+        ids += esatti
+        frase = re.sub(r"\b%s\b" % re.escape(nm), " ", frase)
+    elif esatti and len(nm.split()) >= 2 and not re.fullmatch(r"(?:tv|luc[ei]|tend[ae])\s+(?:%s)" % "|".join(STANZE), nm):
         ids += esatti[:1]
         frase = re.sub(r"\b%s\b" % re.escape(nm), " ", frase)
     rx = re.compile(r"\b%s\b(?:%s)?" % (_COSE, _STANZA))
@@ -539,6 +562,42 @@ def condizione(testo, casa, avv):
     return c
 
 
+def condizioni(testo, casa, avv):
+    """Una o piu condizioni unite da "e" / "o". Lista di condizioni da mettere insieme, oppure None."""
+    c = condizione(testo, casa, avv)
+    if c:
+        return [c]
+    for rx, tipo in ((r"\s+(?:o|oppure)\s+(?:se\s+)?", "or"), (r"\s+(?:e|ed|ma)\s+(?:se\s+|solo se\s+)?", "and")):
+        pezzi = [z for z in re.split(rx, testo.strip()) if z]
+        if len(pezzi) < 2:
+            continue
+        fatte = [condizioni(z, casa, avv) for z in pezzi]
+        if all(fatte):
+            if tipo == "or":
+                return [{"condition": "or", "conditions": [x[0] if len(x) == 1 else {"condition": "and", "conditions": x} for x in fatte]}]
+            return [x for gruppo in fatte for x in gruppo]
+    return None
+
+
+_MODI = ("piano", "lentamente", "gradualmente", "dolcemente", "delicatamente", "velocemente")
+
+
+def significato(p, casa):
+    """Parole con piu significati: si chiede, non si sceglie in silenzio."""
+    if not re.search(r"\d|tramonto|\balba\b|mezzanotte|mezzogiorno|quando|appena|\bbuio\b", p):
+        for rx, testo, scelte in ((r"\b(?:tutte le sere|la sera|di sera|stasera)\b", "la sera", (("al tramonto", "al tramonto"), ("alle 20", "alle 20"), ("alle 22", "alle 22"))),
+                                  (r"\b(?:tutte le mattine|la mattina|di mattina)\b", "la mattina", (("all'alba", "all'alba"), ("alle 7", "alle 7"), ("alle 8", "alle 8")))):
+            m = re.search(rx, p)
+            if m:
+                raise Domanda("riscrivi:" + m.group(0), "\"%s\": a che ora?" % testo,
+                              [{"valore": {"testo": v}, "nome": n, "dettaglio": ""} for v, n in scelte], riscrivi=True)
+    m = re.search(r"\bfa (freddo|caldo)\b", p)
+    if m:
+        ha = any(casa.classe(s) == "temperature" and casa.vivo(s) and not re.search(r"batter|cpu", casa.testo(s)) for s in casa.states)
+        raise Domanda("riscrivi:" + m.group(0), ("\"%s\": scrivi la soglia, per esempio \"la temperatura scende sotto 18 gradi\"." % m.group(0)) if ha
+                      else "\"%s\": in casa non trovo un sensore di temperatura. Scrivi un altro evento." % m.group(0), riscrivi=True)
+
+
 # ---------- pezzo ----------
 def tempi(seg):
     """Estrae dal pezzo orari/sole (trigger), fasce e giorni (condizioni). Ritorna (trigger, condizioni, giorni, resto)."""
@@ -607,7 +666,7 @@ def messaggio(originale, chiave):
 def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     for da, a_ in ((r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
-                   (r"\bal calar del sole\b", "al tramonto"), (r"\be (?:sono )?(?=dopo le \d)", " "), (r"\bcon scritto\b", "che"), (r"\bmezz'ora\b", "30 minuti"), (r"\ba mezzanotte e mezz[ao]\b", "alle 0:30"),
+                   (r"\ball'una\b(?! e)", "alle 1:00"), (r"\bal calar del sole\b", "al tramonto"), (r"\bmentre\b", "solo se"), (r"\be (?:sono )?(?=dopo le \d)", " "), (r"\bcon scritto\b", "che"), (r"\bmezz'ora\b", "30 minuti"), (r"\ba mezzanotte e mezz[ao]\b", "alle 0:30"),
                    (r"\b(?:quando )?(?:fa|si fa) buio\b(?= (?:accend|spegn|apr|chiud|alz|abbass))", "al tramonto"),
                    (r"\b(?:tranne|escluso|eccetto) (?:il |nel )?(?:weekend|fine settimana)\b", "nei giorni feriali"),
                    (r"\bfa(?:i|llo|lla) ripartire\b", "riavvialo"), (r"\bfai partire\b", "avvia"),
@@ -661,16 +720,18 @@ def descrivi(azioni, casa):
     return " + ".join(out)
 
 
-def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False):
+def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False, memoria=None):
     """Come _costruisci; con domande=True un pezzo dubbio diventa {"domanda": ...} invece di None."""
     casa = Casa(states)
-    casa.risposte, casa.domande = dict(risposte or {}), domande
+    casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
     try:
         r = _costruisci(prompt, casa, notify, io, chiedi)
     except Domanda as d:
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
         return {"domanda": Domanda("riscrivi:" + casa.pezzo, "Non ho capito \"%s\". Riscrivi questo pezzo con altre parole." % casa.pezzo.replace("e'", "è"), riscrivi=True).d}
+    if r and casa.usata:
+        r["avvisi"] += list(dict.fromkeys(casa.usata))
     return r
 
 
@@ -706,6 +767,16 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             if vecchio and nuovo and nuovo != vecchio and vecchio in p:
                 p, riscritta = p.replace(vecchio, ripeti_verbo(parlato(nuovo)), 1), True
     frase_vera = p
+    p = re.sub(r"\s*[,;.]?\s*\b(?:(?:e |ma )?altrimenti|se no|in caso contrario)\b\s*,?\s*", ". __else__ ", p)
+    ultimo_if = ramo_else = None
+    if casa.domande:
+        significato(p, casa)
+        persone = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "person"]
+        if not io and len(persone) >= 2 and re.search(r"\b(?:esco|rientro|torno|arrivo|me ne vado)\b", p):
+            chi = (casa.risposte.get("chi:io") or {}).get("entita")
+            if not chi:
+                raise Domanda("chi:io", "Chi intendi con \"io\"?", _opz(casa, persone) + [{"valore": {"entita": ["zone.home"]}, "nome": "Tutti: quando la casa resta vuota o torna qualcuno", "dettaglio": ""}])
+            io = chi[0] if chi[0] in persone else ""
     segs = [s.strip(" ,") for s in _TAGLIO.split(p) if s and s.strip(" ,")]
     rami, cur = [], {"tr": [], "cond": [], "az": []}
     giorni_tutti, sospese, ultimi, chieste = None, [], [], 0
@@ -719,6 +790,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             rami.append(dict(cur))
 
     for seg in segs:
+        if seg.startswith("__else__"):
+            seg = seg[8:].strip()
+            if ultimo_if is None or "else" in ultimo_if or re.search(r"\b(?:se|quando|appena|alle)\b", seg):
+                return None
+            ramo_else = ultimo_if["else"] = []
+            blocco, verbo_prec = None, verbo_prec
         casa.pezzo = seg if "__msg__" not in seg else ""
         eccez = None
         m = re.search(r"\b(?:tranne|eccetto|escluse?|escluso|esclusi|ma non)\b(.*)$", seg)
@@ -778,21 +855,22 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         if m:
             corpo = m.group(1)
             cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
-            c = condizione(corpo[:cmd.start()] if cmd else corpo, casa, avv)
-            if not c:
+            cs = condizioni(corpo[:cmd.start()] if cmd else corpo, casa, avv)
+            if not cs:
                 return None
             prima = seg[:m.start()].strip()
             resto_seg = corpo[cmd.start():] if cmd else ""
             if not _resto(resto_seg) and not _resto(prima) and re.search(r"\bsolo se\b|\bpurche\b", m.group(0)) and cur["az"] and not trig:
-                cur["cond"].append(c)   # "accendi X, ma solo se Y, e poi...": la condizione riguarda quello gia detto
+                cur["cond"] += cs   # "accendi X, ma solo se Y, e poi...": la condizione riguarda quello gia detto
                 continue
             prefisso = bool(_resto(resto_seg) or not _resto(prima))
             if prefisso:
-                sospese.append(c); seg = (prima + " " + resto_seg).strip()
-                if c.get("entity_id", "").startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) or c["condition"] == "not":
+                sospese += cs; seg = (prima + " " + resto_seg).strip()
+                c = cs[0]
+                if len(cs) == 1 and (str(c.get("entity_id", "")).startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) or c["condition"] == "not"):
                     ultimi = [(c.get("entity_id") or c["conditions"][0]["entity_id"])]
             else:   # "spegni X se Y": la condizione vale per questa azione
-                sospese.append(c); seg = prima
+                sospese += cs; seg = prima
             apri_blocco = apri_blocco or prefisso
         # nuovo quando => nuovo ramo
         if trig:
@@ -898,7 +976,17 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                 # il pezzo non e capito: lo chiedo al modello, da solo
                 frase = " ".join((parola if mv else "") .split() + [seg if not mv else _togli(seg, mv)]).strip()
                 frase = frase.replace("e'", "è")
+                modi = _resto(resto or "")
+                if casa.domande and modi and all(w in _MODI for w in modi):
+                    senza = " ".join(w for w in casa.pezzo.split() if w not in _MODI)
+                    raise Domanda("riscrivi:" + casa.pezzo, "Non so fare \"%s\". Continuo senza?" % " ".join(modi),
+                                  [{"valore": {"testo": senza}, "nome": "Si, senza \"%s\"" % " ".join(modi), "dettaglio": ""}], riscrivi=True)
+                cosa_ = "pezzo:" + " ".join(_resto(resto or frase))
                 risp = casa.risposte.get("pezzo:" + frase) or {}
+                if not risp and casa.domande and eccez is None and not anafora and not _PESANTI.search(" ".join(_resto(resto or ""))):
+                    ric = ricordata(casa, cosa_, set(e_ for e_ in casa.by if core._dom(e_) in _DOM_VERBO.get(verbo, ())))
+                    if ric:
+                        risp = {"entita": ric}
                 if risp.get("azioni"):
                     fatte, ids = risp["azioni"], None
                 elif risp.get("entita"):
@@ -916,7 +1004,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                         if fatte and plausibile(fatte, frase):
                             opz.append({"valore": {"azioni": fatte}, "nome": "Proposta AI: " + descrivi(fatte, casa), "dettaglio": ""})
                         if opz:
-                            raise Domanda("pezzo:" + frase, "Non ho capito \"%s\". Cosa intendi?" % frase, opz, multi=True, riscrivi=True)
+                            raise Domanda("pezzo:" + frase, "Non ho capito \"%s\". Cosa intendi?" % frase, opz, multi=True, riscrivi=True, ricorda=cosa_ if _resto(resto or "") else "")
                         return None
                     if not fatte:
                         return None
@@ -981,8 +1069,13 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         md = re.search(r"\bper\s+(\d+)\s*(second|minut|or)", seg)
         if md:
             return None
-        if sospese:
+        if ramo_else is not None:
+            if sospese:
+                return None
+            ramo_else += azioni
+        elif sospese:
             nuovo = {"if": sospese, "then": azioni}
+            ultimo_if = nuovo
             cur["az"].append(nuovo); sospese = []
             blocco = nuovo if apri_blocco else None
             apri_blocco = False
@@ -992,6 +1085,8 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             cur["az"] += azioni
     casa.pezzo = ""
     chiudi()
+    if ramo_else is not None and not ramo_else:
+        return None
     if sospese or not rami or any(not r["tr"] or not r["az"] for r in rami):
         return None
     cfg = {"alias": originale if len(originale) <= 60 else originale[:59].rsplit(" ", 1)[0] + "…", "mode": "single"}

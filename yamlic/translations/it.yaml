@@ -53,6 +53,9 @@ configuration:
   micro:
     name: "Micro-frasi"
     description: "Divide la richiesta in pezzi e li costruisce con regole in casa tua; l'AI serve solo per i pezzi non capiti."
+  mappa:
+    name: Usa la mappa della casa
+    description: Nasconde le entita tecniche e usa le tue correzioni di "La tua casa".
   domande:
     name: Domande sui pezzi dubbi
     description: Se un pezzo della richiesta non e chiaro, Yamlic ti fa una domanda e propone le scelte.
