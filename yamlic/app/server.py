@@ -5,6 +5,7 @@ import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import core, micro, rete, verifica
+import mappa
 
 OPT = core.load_options()
 
@@ -203,7 +204,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.38"
+VERSIONE = "0.3.39"
 _RETE = {"t": 0, "v": None}
 
 
@@ -602,6 +603,11 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path.split("?")[0].endswith("/api/mappa"):   # sola lettura
+            try:
+                return self._send(200, mappa.riassunto(mappa.costruisci(_stati(None))))
+            except Exception as ex:
+                return self._send(200, {"error": str(ex)[:200]})
         if self.path.split("?")[0].endswith("/api/rete"):
             self._send(200, rete_info())
         else:
