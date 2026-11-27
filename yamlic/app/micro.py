@@ -143,7 +143,9 @@ class Casa:
         return _n(core._t(s))
 
     def vivo(self, s):
-        return s.get("state") != "unavailable"
+        """Disponibile, oppure sistemato dall'utente in "La tua casa" (se e offline per poco resta valido)."""
+        a = s.get("attributes") or {}
+        return s.get("state") != "unavailable" or bool(a.get("_stanza_utente") or a.get("_funzione"))
 
     def classe(self, s):
         return (s.get("attributes") or {}).get("device_class")
@@ -990,6 +992,10 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, dom
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
         return {"domanda": Domanda("riscrivi:" + casa.pezzo, "Non ho capito \"%s\". Riscrivi questo pezzo con altre parole." % casa.pezzo.replace("e'", "è"), riscrivi=True).d}
+    if r and r.get("yaml"):
+        for e in sorted(set(re.findall(r"\b[a-z_]+\.[a-z0-9_]+\b", r["yaml"])) & set(casa.by)):
+            if casa.by[e].get("state") == "unavailable":
+                r["avvisi"].append("%s adesso e offline: l'automazione funzionera quando torna disponibile" % casa.nome(e))
     if r and casa.usata:
         r["avvisi"] += list(dict.fromkeys(casa.usata))
     return r
