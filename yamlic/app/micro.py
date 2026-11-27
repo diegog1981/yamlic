@@ -281,6 +281,10 @@ def simile(testo, casa):
         return None
     hit = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) in ("light", "switch", "fan", "cover", "media_player", "input_boolean")
            and casa.vivo(s) and parole <= set(re.findall(r"[a-z0-9]+", casa.testo(s)))]
+    if not hit:   # singolare/plurale: "barre" = "barra", "faretti" = "faretto"
+        radici = [w[:-1] if len(w) > 4 else w for w in parole]
+        hit = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) in ("light", "switch", "fan", "cover", "media_player", "input_boolean")
+               and casa.vivo(s) and all(re.search(r"\b%s" % re.escape(r_), casa.testo(s)) for r_ in radici)]
     return hit[0] if len(hit) == 1 else None
 
 
@@ -683,15 +687,22 @@ def condizione(testo, casa, avv):
     if not m:
         return None
     eid = stato_entita(m.group("s"), casa, avv)
+    if not eid and re.search(r"\b(?:le|i|gli|tutt\w*)\b", m.group("s")) and re.search(r"[ei]$", m.group("st")):   # plurale: tutte devono essere cosi
+        ids, resto = bersagli(m.group("s"), casa, [])
+        if ids and not _resto(resto) and len({core._dom(e) for e in ids}) == 1 and core._dom(ids[0]) in ("light", "switch", "cover", "fan"):
+            eid = ids
     if not eid:
         return None
     v = m.group("st")
     stato = "on" if v.startswith("acc") else "off" if v.startswith("spe") else "open" if v.startswith("ap") else "closed"
     if m.groupdict().get("non"):   # "non e accesa" = spenta, "non e aperta" = chiusa
         stato = {"on": "off", "off": "on", "open": "closed", "closed": "open"}[stato]
-    if core._dom(eid) != "cover":
+    dom_ = core._dom(eid[0] if isinstance(eid, list) else eid)
+    if dom_ != "cover":
         stato = {"open": "on", "closed": "off"}.get(stato, stato)
     c = {"condition": "state", "entity_id": eid, "state": stato}
+    if isinstance(eid, list):
+        return c
     if core._dom(eid) == "media_player" and stato == "off":
         c = {"condition": "state", "entity_id": eid, "state": ["off", "standby"]}
     if core._dom(eid) == "media_player" and stato == "on":
@@ -1277,7 +1288,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             seg = _togli(seg, mn)
             txt = testo_msg if "__msg__" in seg else None
             seg = seg.replace("__msg__", " ")
-            mob = sorted(n for n in notify if n.startswith("mobile_app_"))
+            mob = sorted({str(n).replace("notify.", "", 1) for n in notify if str(n).replace("notify.", "", 1).startswith("mobile_app_")})
             srv = mob[0] if len(mob) == 1 else "notify"
             chi_ = casa.dest or (io if io.startswith("person.") and len(mob) > 1 else None)
             if chi_ and len(mob) > 1:
