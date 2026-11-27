@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.18"
+VERSIONE = "0.4.19"
 _RETE = {"t": 0, "v": None}
 
 
@@ -357,6 +357,8 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
         print("micro: errore %s" % str(ex)[:120], flush=True)
         return None
     if not r:
+        if re.search(r"\bpiov", prompt.lower()):
+            print("micro: nessun risultato per %r | meteo=%s" % (prompt[:60], [(x["entity_id"], x.get("state")) for x in states if x["entity_id"].startswith("weather.")]), flush=True)
         return None
     if "domanda" in r:
         d = r["domanda"]
