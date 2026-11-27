@@ -153,6 +153,16 @@ class Casa:
         return [h[1] for h in sel], sel[0][2]
 
 
+def simile(testo, casa):
+    """Unica entita comandabile il cui nome+id contiene tutte le parole dette (almeno 3). None se zero o piu di una."""
+    parole = {w for w in _resto(testo) if len(w) > 1}
+    if len(parole) < 3:
+        return None
+    hit = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) in ("light", "switch", "fan", "cover", "media_player", "input_boolean")
+           and casa.vivo(s) and parole <= set(re.findall(r"[a-z0-9]+", casa.testo(s)))]
+    return hit[0] if len(hit) == 1 else None
+
+
 # ---------- gruppi di bersagli ("le luci del giardino e la tv del soggiorno") ----------
 _COSE = r"(luc[ei]|lampade?|lampadina|faretti|illuminazione|tende?|tapparell[ae]|serrand[ae]|tv|tele|televisione|televisore)"
 _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?:mio\s+|mia\s+)?(%s)\b)" % "|".join(STANZE)
@@ -225,8 +235,13 @@ def escludi(ids, testo, casa, avv):
 # ---------- quando / condizioni ----------
 def stato_entita(testo, casa, avv):
     """'la tv del soggiorno' -> entita singola per condizioni e trigger di stato."""
-    ids, resto = bersagli(testo, casa, avv)
+    avv2 = []
+    e = simile(testo, casa)
+    if e:
+        return e
+    ids, resto = bersagli(testo, casa, avv2)
     if ids and len(ids) == 1 and not _resto(resto):
+        avv.extend(avv2)
         return ids[0]
     return None
 
@@ -271,8 +286,11 @@ def evento(testo, casa, io, avv):
         classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power"}[m.group(1)]
         parole = _resto(m.group(2))
         cand = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "sensor" and casa.vivo(s) and casa.classe(s) == classe
+                and (classe == "power" or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
                 and parole and all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
         if len(cand) != 1:
+            if not cand:
+                avv.append("nessun sensore di %s in \"%s\"" % (m.group(1), m.group(2)))
             return None
         v = float(m.group(4).replace(",", ".")); v = int(v) if v == int(v) else v
         return fine({"trigger": "numeric_state", "entity_id": cand[0], ("below" if "sotto" in m.group(3) or "meno" in m.group(3) else "above"): v})
@@ -403,6 +421,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
     rami, cur = [], {"tr": [], "cond": [], "az": []}
     giorni_tutti, sospese, ultimi, chieste = None, [], [], 0
     verbo_prec = None
+    comandate = False
     apri_blocco = False
     blocco = None   # "se X, spegni ... e annuncia ...": le azioni che seguono restano dentro lo stesso if
 
@@ -454,7 +473,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
                 return None
             trig.append(r[0]); ev_cond = r[1]
             ee = r[0].get("entity_id", "")
-            if ee.startswith(("light.", "switch.", "cover.", "media_player.", "fan.")):
+            if ee.startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) and not comandate:
                 ultimi = [ee]
             seg = (seg[:m.start()] + " " + (corpo[cmd.start():] if cmd else "")).strip()
         # se ... (condizione sui pezzi che seguono)
@@ -557,6 +576,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
                         return None
                     eccez = None
                 ultimi = ids
+                comandate = True
                 per_dom = {}
                 for e in ids:
                     per_dom.setdefault(core._dom(e), []).append(e)
@@ -628,7 +648,7 @@ def _testo_evento(tr, casa, originale):
         return "Casa vuota" if "below" in t else "Qualcuno e tornato a casa"
     if t.get("trigger") == "state" and isinstance(t.get("to"), str) and t.get("for"):
         d = t["for"]
-        return "%s %s da %s" % (casa.nome(e), {"on": "acceso", "off": "spento", "open": "aperto", "closed": "chiuso"}.get(t["to"], t["to"]),
+        return "%s: %s da %s" % (casa.nome(e), {"on": "stato acceso", "off": "stato spento", "open": "stato aperto", "closed": "stato chiuso"}.get(t["to"], t["to"]),
                                " ".join("%s %s" % (v, {"minutes": "minuti", "seconds": "secondi", "hours": "ore"}[k]) for k, v in d.items()))
     return "Yamlic: " + originale[:100]
 

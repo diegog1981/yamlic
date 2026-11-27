@@ -79,6 +79,8 @@ def controlla(prompt, y, states):
     p = " ".join(micro._n(prompt).split())
     # il testo di notifiche e annunci non conta come richiesta
     q = re.sub(r"\b(avvis\w+|notific\w+|annunci\w+|notifica)\b(.*?)\bche\b.*?(?=$|[.;]| e poi | poi )", r"\1\2", p)
+    # "la striscia LED sotto la TV" e il nome di una luce: li la TV non e un bersaglio
+    q = re.sub(r"\b(led|striscia|luc[ei]|lampad\w*|retroillumin\w*)\b(?:\s+(?:led|luminosa))?\s+(?:sotto|dietro|sopra|di|della)\s+(?:la\s+)?tv\b", r"\1", q)
     err = []
     known = {s["entity_id"]: s for s in states}
     trig = [t for d in docs for t in _lista(d.get("triggers")) if isinstance(t, dict)]
@@ -102,6 +104,10 @@ def controlla(prompt, y, states):
             err.append("l'entita %s non esiste" % e)
         elif known.get(e, {}).get("state") == "unavailable":
             err.append("l'entita %s non e disponibile, usane un'altra" % e)
+    if re.search(r"temperatura", q) and not re.search(r"batter|tablet|telefono|\bcpu\b|router", q):
+        for e in sorted(set(ids)):
+            if e.startswith("sensor.") and re.search(r"batter|cpu|chip|processor", micro._n(e + " " + ((known.get(e, {}).get("attributes") or {}).get("friendly_name") or ""))):
+                err.append("%s e la temperatura di un dispositivo (batteria o processore), non di una stanza" % e)
     # orari
     orari_yaml = {str(t.get("at"))[:5].zfill(5) for t in trig if t.get("trigger") == "time"}
     for n in tutti:
