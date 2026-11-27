@@ -147,25 +147,28 @@ async function gen(extra){if(busy||!$('p').value.trim())return;busy=true;$('b').
 $('b').onclick=()=>gen();
 const FUNZ=['','luce','presa','interruttore','elettrodomestico','tenda','TV','audio','cancello/portone','ventilatore'];
 const CAMPO='style="width:100%;font:inherit;padding:.4em;margin:.2em 0;border-radius:8px;border:1px solid var(--bd);background:var(--code);color:var(--tx)"';
-function scheda(v){const m=v.mia||{};return '<div class=ve data-id="'+esc(v.id)+'" style="border-top:1px solid var(--bd);padding:.5em 0"><b>'+esc(v.nome)+'</b><br><span class=id>'+esc(v.id)+'</span><br><span class=mu>'+esc(v.funzione||'')+(v.stanze&&v.stanze.length?' &middot; '+esc(v.stanze.join(', ')):'')+(v.dubbi&&v.dubbi.length?' &middot; <b>'+esc(v.dubbi.join('; '))+'</b>':'')+'</span>'
- +'<select class=fz '+CAMPO+'>'+FUNZ.map(f=>'<option value="'+f+'"'+((m.funzione||'')==f?' selected':'')+'>'+(f||'cosa fa: automatico')+'</option>').join('')+'</select>'
- +'<input class=sz '+CAMPO+' placeholder="stanza" value="'+esc(m.stanza||'')+'"><input class=sn '+CAMPO+' placeholder="come la chiami tu" value="'+esc(m.nome||'')+'">'
- +'<label><input type=checkbox class=ig'+(m.ignora?' checked':'')+'><span>non usare</span></label></div>'}
+function scheda(v){const m=v.mia||{},sc=STANZE.includes(m.stanza||'')||!m.stanza;
+ const fz='<select class=fz '+CAMPO+'>'+FUNZ.map(f=>'<option value="'+f+'"'+((m.funzione||'')==f?' selected':'')+'>'+(f?f:'Cos\'è: '+(v.funzione&&v.funzione!='interruttore'?v.funzione+' (automatico)':'non so'))+'</option>').join('')+'<option value="__no"'+(m.ignora?' selected':'')+'>Non usare</option></select>';
+ const sz='<select class=sz '+CAMPO+'><option value="">Stanza: '+esc(v.stanze&&v.stanze.length?v.stanze.join(', ')+' (automatica)':'non so')+'</option>'+STANZE.map(r=>'<option'+(m.stanza==r?' selected':'')+'>'+esc(r)+'</option>').join('')+'<option value="__altra"'+(!sc?' selected':'')+'>Altra...</option></select><input class=sa '+CAMPO+' placeholder="nome della stanza" value="'+esc(!sc?m.stanza:'')+'" style="display:'+(!sc?'block':'none')+'">';
+ return '<div class=ve data-id="'+esc(v.id)+'" style="border-top:1px solid var(--bd);padding:.5em 0"><b>'+esc(v.nome)+'</b>'+(v.dubbi&&v.dubbi.length?' <span class=mu>&middot; '+esc(v.dubbi.join('; '))+'</span>':'')
+ +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4em">'+fz+'<div>'+sz+'</div></div>'
+ +'<details><summary class=mu>Come lo chiami tu (facoltativo)</summary><input class=sn '+CAMPO+' placeholder="es. luce del bagno" value="'+esc(m.nome||'')+'"></details></div>'}
+let STANZE=[];
 function mostraCasa(j){const h=$('hm');if(j.error){h.innerHTML=esc(j.error);return}
+ STANZE=j.stanze||[];
  const dub=j.voci.filter(v=>v.stato=='dubbia'),altre=j.voci.filter(v=>v.stato!='dubbia');
  let x='<b>La tua casa</b><p class=mu>Resta sul tuo Home Assistant. Compila solo quello che serve. Chiare: '+(j.conta.ok||0)+', dubbie: '+(j.conta.dubbia||0)+', tecniche nascoste: '+(j.conta.tecnica||0)+'.</p>';
- x+='<div class=g>Da chiarire ('+dub.length+')</div>'+dub.map(scheda).join('')+'<details><summary>Tutte le altre ('+altre.length+')</summary>'+altre.map(scheda).join('')+'</details>';
+ x+='<div class=g>Da chiarire ('+dub.length+')</div>'+dub.map(scheda).join('');
+ const gr={};altre.forEach(v=>{const k=(v.mia&&v.mia.stanza)||(v.stanze&&v.stanze[0])||'senza stanza';(gr[k]=gr[k]||[]).push(v)});
+ x+='<div class=g>Già chiare (controlla se vuoi)</div>'+Object.keys(gr).sort().map(k=>'<details><summary>'+esc(k)+' ('+gr[k].length+')</summary>'+gr[k].map(scheda).join('')+'</details>').join('');
  if(j.memoria.length)x+='<div class=g>Scelte che ricordo</div>'+j.memoria.map(m=>'<div class=row><span>'+esc(m.testo)+' &rarr; '+esc(m.scelta)+'</span><button type=button class="s dm" data-k="'+esc(m.chiave)+'">Dimentica</button></div>').join('');
- x+='<div class=g>Il file della casa</div><p class=mu>Scritto da Yamlic leggendo la tua casa. Correggilo: vale per le regole e per l\'AI. Resta qui.</p><textarea id=md rows=14 style="width:100%;font-family:monospace"></textarea><div class=row><button id=ms type=button>Salva file</button><button id=mg type=button class=s>Rigenera bozza</button><span id=mmsg class=mu></span></div>';
  h.innerHTML=x+'<div class=row><button id=hs type=button>Salva</button><button id=hc type=button class=s>Chiudi</button><span id=hmsg class=mu></span></div>';
- const prima={};h.querySelectorAll('.ve').forEach(d=>prima[d.dataset.id]=leggi(d));
+ const prima={};h.querySelectorAll('.ve').forEach(d=>{prima[d.dataset.id]=leggi(d);const z=d.querySelector('.sz');z.onchange=()=>{d.querySelector('.sa').style.display=z.value=='__altra'?'block':'none'}});
  $('hc').onclick=()=>h.classList.add('hide');
  $('hs').onclick=async()=>{const ent={};h.querySelectorAll('.ve').forEach(d=>{const v=leggi(d);if(JSON.stringify(v)!=JSON.stringify(prima[d.dataset.id]))ent[d.dataset.id]=v});
   mostraCasa(await casaApi({entita:ent}));$('hmsg')&&($('hmsg').textContent='Salvato')};
- h.querySelectorAll('.dm').forEach(b=>b.onclick=async()=>mostraCasa(await casaApi({dimentica:b.dataset.k})));
- const carMd=async n=>{try{const r=await (await fetch('api/casa_md'+(n?'?nuovo=1':''))).json();$('md').value=r.testo||'';$('mmsg').textContent=r.error?r.error:(r.salvato?'Salvato':'Bozza: controlla e salva')}catch(e){$('mmsg').textContent='Errore: '+e}};carMd(0);
- $('mg').onclick=()=>carMd(1);$('ms').onclick=async()=>{await casaApi({md:$('md').value});$('mmsg').textContent='Salvato'}}
-function leggi(d){return {funzione:d.querySelector('.fz').value,stanza:d.querySelector('.sz').value.trim(),nome:d.querySelector('.sn').value.trim(),ignora:d.querySelector('.ig').checked}}
+ h.querySelectorAll('.dm').forEach(b=>b.onclick=async()=>mostraCasa(await casaApi({dimentica:b.dataset.k})));}
+function leggi(d){const f=d.querySelector('.fz').value,z=d.querySelector('.sz').value;return {funzione:f=='__no'?'':f,stanza:z=='__altra'?d.querySelector('.sa').value.trim():z,nome:d.querySelector('.sn').value.trim(),ignora:f=='__no'}}
 async function casaApi(b){try{return await (await fetch(b?'api/casa':'api/mappa',b?{method:'POST',body:JSON.stringify(b)}:undefined)).json()}catch(e){return {error:'Errore: '+e}}}
 $('cb').onclick=async()=>{const h=$('hm');if(!h.classList.contains('hide')){h.classList.add('hide');return}h.classList.remove('hide');h.textContent='Leggo la casa...';mostraCasa(await casaApi())};
 $('p').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))gen()});
@@ -233,7 +236,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.1"
+VERSIONE = "0.4.2"
 _RETE = {"t": 0, "v": None}
 
 
@@ -550,6 +553,7 @@ def vista_casa():
     nomi = {v["id"]: v["nome"] for v in voci}
     out = mappa.riassunto(voci)
     out["voci"] = [dict(v, mia=d["entita"].get(v["id"]) or {}) for v in voci if v["stato"] in ("ok", "dubbia") or v["id"] in d["entita"]]
+    out["stanze"] = sorted({r for v in voci for r in v["stanze"]} | {str(c.get("stanza")) for c in d["entita"].values() if c.get("stanza")})
     out["memoria"] = [{"chiave": k, "testo": k.split(":", 1)[-1], "scelta": ", ".join(nomi.get(e, e) for e in v)} for k, v in d["memoria"].items()]
     return out
 
