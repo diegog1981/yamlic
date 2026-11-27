@@ -16,7 +16,7 @@ VERBI = {"accend": "turn_on", "riaccend": "turn_on", "spegn": "turn_off", "apr":
          "avvia": "start", "riavvia": "start", "ferma": "stop", "blocca": "lock", "sblocca": "unlock"}
 _V = r"(?:ri)?(?:accend|spegn|apr|chiud)\w*|alz\w+|abbass\w+|(?:ri)?avvia\w*|ferma\w*|blocca\w*|sblocca\w*"
 _NOTIFICA = r"(?:avvisami|avvertimi|notificami|(?:mandami|inviami|manda|invia)\s+(?:una\s+|un\s+)?(?:notifica|messaggio(?:\s+con\s+scritto)?)(?:\s+(?:sul|al)\s+(?:mio\s+)?(?:telefono|cellulare))?)"
-_ANNUNCIO = r"(?:annuncia|annunciami|di'|dillo|fai dire)"
+_ANNUNCIO = r"(?:annuncia|annunciami|fai (?:un )?annuncio|di'|dillo|fai dire)"
 # dove si puo tagliare: virgole/punti, "poi", e "e/ma" solo se dopo viene un verbo o un nuovo quando/se
 _INIZIO = r"(?:(?:metti|imposta|porta|riporta|rimanda)\b|(?:%s)\b|%s\b|%s\b|quando\b|appena\b|se\b|alle\b|all'|al tramonto|a mezz|dopo\b|poi\b|\d+ minuti (?:prima|dopo))" % (_V, _NOTIFICA, _ANNUNCIO)
 _TAGLIO = re.compile(r"(?<!\d)[.;!?]+(?!\d)\s*|,\s*(?:(?:e|ma)\s+)?(?:poi\s+)?|\s+(?:e|ed|ma)\s+poi\s+|\s+poi\s+|\s+(?:e|ed|ma|mentre|invece)\s+(?=%s)" % _INIZIO)
@@ -365,7 +365,7 @@ def bersagli(frase, casa, avv, verbo=None):
     if sopr:
         ids += esatti
         frase = re.sub(r"\b%s\b" % re.escape(nm), " ", frase)
-    elif esatti and len(nm.split()) >= 2 and not re.fullmatch(r"(?:tv|luc[ei]|tend[ae])\s+(?:%s)" % "|".join(STANZE), nm):
+    elif esatti and len(nm.split()) >= 2 and (not re.fullmatch(r"(?:tv|luc[ei]|tend[ae])\s+(?:%s)" % "|".join(STANZE), nm) or len(esatti) == 1):
         ids += esatti[:1]
         frase = re.sub(r"\b%s\b" % re.escape(nm), " ", frase)
     rx = re.compile(r"\b%s\b(?:%s)?" % (_COSE, _STANZA))
@@ -496,14 +496,17 @@ def binario(casa, classi, dove):
 def porta_finestra(t, casa):
     """'si apre la finestra della cucina', 'la porta d'ingresso resta aperta' -> (sensore, 'on'/'off')."""
     cosa = r"(?:la |il |una )?(?P<c>porta|finestra|portafinestra)(?P<d>(?: (?:d'|di |del |della |dell'|in |nel )?\s*\w+)?)"
-    for pat in (r"(?:si (?P<v>apre|chiude)|viene (?P<w>aperta|chiusa)) " + cosa, cosa + r" (?:si (?P<v>apre|chiude)|(?:viene|resta|rimane|e'|e) (?P<w>aperta|chiusa))"):
+    for pat in (r"(?:si (?P<v>apre|chiude)|viene (?P<w>aperta|chiusa)) " + cosa, cosa + r" (?:si (?P<v>apre|chiude)|(?P<non>non )?(?:viene|resta|rimane|e'|e) (?P<w>aperta|chiusa))"):
         m = re.fullmatch(pat, t)
         if m:
             classi = ("door", "opening") if m.group("c") == "porta" else ("window", "opening")
             dove = re.sub(r"^(?:\s*(?:d'|di |del |della |dell'|in |nel ))", "", m.group("d").strip() + " ").strip()
             e = binario(casa, classi, dove)
             v = m.group("v") or m.group("w")
-            return (e, "on" if v.startswith("apr") or v.startswith("aper") else "off") if e else None
+            aperta = v.startswith("apr") or v.startswith("aper")
+            if m.groupdict().get("non"):
+                aperta = not aperta
+            return (e, "on" if aperta else "off") if e else None
     return None
 
 
@@ -675,7 +678,8 @@ def condizione(testo, casa, avv):
     pf = porta_finestra(t, casa)
     if pf:
         return {"condition": "state", "entity_id": pf[0], "state": pf[1]}
-    m = re.fullmatch(r"(?P<s>.+?) (?:e'|sono|risulta|e) (?:ancora |gia )?(?P<st>acces[aoei]|spent[aoei]|apert[aoei]|chius[aoei])", t)
+    m = re.fullmatch(r"(?P<s>.+?) (?P<non>non )?(?:e'|sono|risulta|risultano|e) (?:ancora |gia )?(?P<st>acces[aoei]|spent[aoei]|apert[aoei]|chius[aoei])", t) or \
+        re.fullmatch(r"(?P<non>non )?(?:e'|sono|e) (?:ancora |gia )?(?P<st>acces[aoei]|spent[aoei]|apert[aoei]|chius[aoei]) (?P<s>.+)", t)
     if not m:
         return None
     eid = stato_entita(m.group("s"), casa, avv)
@@ -683,9 +687,13 @@ def condizione(testo, casa, avv):
         return None
     v = m.group("st")
     stato = "on" if v.startswith("acc") else "off" if v.startswith("spe") else "open" if v.startswith("ap") else "closed"
+    if m.groupdict().get("non"):   # "non e accesa" = spenta, "non e aperta" = chiusa
+        stato = {"on": "off", "off": "on", "open": "closed", "closed": "open"}[stato]
     if core._dom(eid) != "cover":
         stato = {"open": "on", "closed": "off"}.get(stato, stato)
     c = {"condition": "state", "entity_id": eid, "state": stato}
+    if core._dom(eid) == "media_player" and stato == "off":
+        c = {"condition": "state", "entity_id": eid, "state": ["off", "standby"]}
     if core._dom(eid) == "media_player" and stato == "on":
         c = {"condition": "not", "conditions": [{"condition": "state", "entity_id": eid, "state": ["off", "standby", "unavailable"]}]}
     return c
@@ -801,7 +809,7 @@ def tempi(seg):
 
 
 def messaggio(originale, chiave):
-    m = re.search(chiave + r".*?\b(?:che|dicendo(?: che)?|:)\s*[\"«]?(.+?)[\"»]?\s*$", originale, re.I)
+    m = re.search(chiave + r".*?(?:\b(?:che|dicendo(?: che)?|dimmi)\b|:|\bdi')\s*[\"«]?(.+?)[\"»]?\s*$", originale, re.I)
     if m:
         t = m.group(1).strip().rstrip(".")
         return t[0].upper() + t[1:]
@@ -939,6 +947,91 @@ def rifai_entita(casa, testo, out, avv):
     return _j.loads(testo_out)
 
 
+_PASSATI = ((r"\bse (.+?) (?:e'|e) (?:finit|terminat)[oa]\b", r"quando \1 finisce"), (r"\bse (.+?) ha (?:finito|terminato)\b", r"quando \1 finisce"),
+            (r"\bse sono (?:tornat|rientrat)[oa]\b", "quando torno"), (r"\bse sono arrivat[oa]\b", "quando arrivo"), (r"\bse sono uscit[oa]\b", "quando esco"),
+            (r"\bse ([a-z]+) (?:e'|e) (?:tornat|rientrat)[oa]\b", r"quando \1 torna"), (r"\bse ([a-z]+) (?:e'|e) arrivat[oa]\b", r"quando \1 arriva"),
+            (r"\bse ([a-z]+) (?:e'|e) uscit[oa]\b", r"quando \1 esce"),
+            (r"\bse si (?:e'|e) (apert|chius|aces|acces|spent)[oa] (.+?)(?= (?:%s)\b|$)" % _V, lambda m: "quando si %s %s" % ({"apert": "apre", "chius": "chiude", "acces": "accende", "aces": "accende", "spent": "spegne"}[m.group(1)], m.group(2))),
+            (r"\bse (.+?) si (?:e'|e) (apert|chius|acces|spent|fermat|bloccat)[oa]\b", lambda m: "quando %s si %s" % (m.group(1), {"apert": "apre", "chius": "chiude", "acces": "accende", "spent": "spegne", "fermat": "ferma", "bloccat": "blocca"}[m.group(2)])))
+
+
+def passati(p):
+    """"se la lavatrice e finita" = "quando la lavatrice finisce": vale solo se non c'e gia un quando o un orario."""
+    if re.search(r"\b(?:quando|appena|ogni volta|alle|dalle|dopo le|prima delle)\b|tramonto|\balba\b|mezzanotte|mezzogiorno", p):
+        return p
+    for rx, a in _PASSATI:
+        p = re.sub(rx, a, p, count=1)
+    return p
+
+
+def telefono(casa, chi, mob):
+    """Il servizio notify del telefono di una persona (dal suo device_tracker), oppure domanda."""
+    pers = [s for s in casa.states if core._dom(s["entity_id"]) == "person" and (s["entity_id"] == chi or _n(casa.nome(s["entity_id"])).split()[:1] == [chi]
+            or _n(casa.nome(s["entity_id"])).startswith(chi))]
+    trov = []
+    for s in pers[:1]:
+        for dt in (s.get("attributes") or {}).get("device_trackers") or []:
+            obj = str(dt).split(".", 1)[-1]
+            trov += [m for m in mob if m == "mobile_app_" + obj or obj in m]
+        if not trov:
+            nome = _n(casa.nome(s["entity_id"])).split()[0]
+            trov = [m for m in mob if nome in m]
+    trov = list(dict.fromkeys(trov))
+    r = (casa.risposte.get("tel:" + chi) or {}).get("entita")
+    if r:
+        return str(r[0]).replace("notify.", "")
+    if len(trov) == 1:
+        return trov[0]
+    if casa.domande:
+        raise Domanda("tel:" + chi, "Su quale telefono avviso %s?" % chi.capitalize(), [{"valore": {"entita": ["notify." + m]}, "nome": m.replace("mobile_app_", "").replace("_", " "), "dettaglio": "notify." + m} for m in mob])
+    return None
+
+
+_SCENA = re.compile(r"^(?:crea(?:mi)? |fai(?:mi)? |imposta )?(?:la |una )?scena\s*(?P<nome>[a-z' ]*?)\s*(?::|,|\bche\b|\bcon\b|\bdove\b)\s*(?P<corpo>.+)$")
+_TERZA = {"chiude": "chiudi", "spegne": "spegni", "accende": "accendi", "apre": "apri", "abbassa": "abbassa", "alza": "alza", "avvia": "avvia"}
+_STATO_SCENA = {"turn_off": "off", "turn_on": "on", "close_cover": "closed", "open_cover": "open"}
+
+
+def scena(prompt, casa, notify, io, chiedi):
+    """"Scena cinema: chiudi le tende, spegni le luci del salotto e lascia accesa solo la striscia led" -> scena di HA."""
+    p = " ".join(_n(prompt).split()).rstrip(" .!")
+    m = _SCENA.match(p)
+    if not m:
+        return None
+    nome = " ".join(m.group("nome").split()) or "nuova"
+    corpo = re.sub(r"\b(%s)\b" % "|".join(_TERZA), lambda x: _TERZA[x.group(1)], m.group("corpo"))
+    tieni = None
+    mt = re.search(r"\s*(?:,|\be\b)?\s*lascia(?:ndo)? acces[aoei] (?:solo |soltanto )?(.+?)\s*$", corpo)
+    if mt:
+        tieni, corpo = mt.group(1), corpo[:mt.start()]
+    r = _costruisci("alle 12:00 " + corpo, casa, notify, io, chiedi)
+    if not r:
+        if casa.domande:
+            raise Domanda("riscrivi:" + corpo.strip(), "Scena %s: non ho capito cosa deve fare \"%s\". Riscrivi solo questo pezzo." % (nome, corpo.strip()), riscrivi=True)
+        return None
+    stati = {}
+    for a in core._azioni_tutte(yaml.safe_load(r["yaml"]).get("actions")):
+        dom, _, srv = a["action"].partition(".")
+        st = _STATO_SCENA.get(srv)
+        if not st or dom not in ("light", "switch", "cover", "media_player", "fan"):
+            return None
+        for e in _lista((a.get("target") or {}).get("entity_id")):
+            stati[e] = st
+    if tieni:
+        ids, resto = bersagli(tieni, casa, [])
+        if not ids or _resto(resto):
+            if not casa.domande:
+                return None
+            ids = scegli(casa, "ent:" + tieni, "Scena %s: quale luce resta accesa (\"%s\")?" % (nome, tieni), sorted(casa.luci(), key=casa.nome))
+        for e in ids:
+            stati[e] = "on"
+    if not stati:
+        return None
+    cfg = {"name": "Scena " + nome.capitalize() if not nome.startswith("scena") else nome.capitalize(), "entities": stati}
+    avv = ["e una SCENA: la attivi a mano o da un'automazione (scene.turn_on)"] + r["avvisi"]
+    return {"yaml": yaml.dump(cfg, Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=1000).rstrip("\n"), "avvisi": avv, "modello": r["modello"], "frase": prompt, "fisso": True, "scena": True}
+
+
 def da_condizioni(cs):
     """"se A e B fai X": un trigger per ogni condizione che diventa vera. None se una non si sa trasformare."""
     out = []
@@ -987,7 +1080,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, dom
     casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
     casa.chiedi_pezzo = pezzo
     try:
-        r = presenza(prompt, casa) or _costruisci(prompt, casa, notify, io, chiedi)
+        r = presenza(prompt, casa) or scena(prompt, casa, notify, io, chiedi) or _costruisci(prompt, casa, notify, io, chiedi)
     except Domanda as d:
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
@@ -1010,12 +1103,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         return None
     # il testo di notifiche/annunci non va spezzato: lo metto da parte
     testo_msg = None
-    m = re.search(r"\b(?:%s|%s)\b[^,.;]*?\b(che|dicendo che|dicendo|:)\s+" % (_NOTIFICA, _ANNUNCIO), p)
+    m = re.search(r"\b(?:%s|%s)\b[^,.;]*?\b(che|dicendo che|dicendo|:|di'|dimmi)\s+" % (_NOTIFICA, _ANNUNCIO), p)
     if m:
         coda = p[m.end():]
         stop = re.search(r"[.;]| e poi |, poi |,? e (?=(?:%s)\b|alle |quando )" % _V, coda)
         fine = m.end() + (stop.start() if stop else len(coda))
-        om = messaggio(originale if not stop else originale[:len(originale)], r"(?:avvis|avvert|notific|annunc|di'|manda|invia|dire)")
+        om = messaggio(originale if not stop else originale[:len(originale)], r"(?:avvis|avvert|notific|annunc|manda|invia|dire)")
         grezzo = p[m.end():fine]
         if om and _n(om).startswith(grezzo[:12]):
             testo_msg = om[:len(grezzo)].rstrip(" .")
@@ -1025,13 +1118,26 @@ def _costruisci(prompt, casa, notify, io, chiedi):
     if m:
         p = re.sub(r"\bquella (?=del|della|dell'|in )", m.group(1) + " ", p)
     p = ripeti_verbo(parlato(p))
-    riscritta = False
-    for _ in range(4):   # pezzi riscritti dall'utente
+    riscritta, applicate = False, set()
+    for _ in range(4):   # pezzi riscritti dall'utente (ognuno una volta sola)
         for k, v in casa.risposte.items():
+            if k in applicate:
+                continue
             vecchio = k[9:] if k.startswith("riscrivi:") else k[6:] if k.startswith("pezzo:") else None
             nuovo = " ".join(_n(str((v or {}).get("testo") or "")).split()).rstrip(" .!")
+            if vecchio and nuovo and k.startswith("riscrivi:") and re.search(r"\b(?:%s)\b" % _V, vecchio) and not re.search(r"\b(?:%s)\b|%s|%s" % (_V, _NOTIFICA, _ANNUNCIO), nuovo):
+                nuovo = nuovo + " " + vecchio   # ha scritto solo quando: lo aggiungo alla frase
             if vecchio and nuovo and nuovo != vecchio and vecchio in p:
                 p, riscritta = p.replace(vecchio, ripeti_verbo(parlato(nuovo)), 1), True
+                applicate.add(k)
+    p = passati(p)
+    casa.dest = None
+    md_ = re.search(r"\s*\b(?:sul|al) (?:telefono|cellulare) (?:di|del|della) ([a-z]+)\b", p)
+    if md_:
+        casa.dest, p = md_.group(1), _togli(p, md_)
+    md_ = re.search(r"\bavvisa(?:re)? ([a-z]{3,})\b", p)
+    if md_ and md_.group(1) not in ("mi", "anche", "tutti"):
+        casa.dest, p = md_.group(1), p[:md_.start()] + "avvisami" + p[md_.end():]
     frase_vera = p
     p = re.sub(r"\s*[,;.]?\s*\b(?:(?:e |ma )?altrimenti|se no|in caso contrario)\b\s*,?\s*", ". __else__ ", p)
     ultimo_if = ramo_else = None
@@ -1098,6 +1204,11 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             if cmd and re.match(r"si (?:accende|spegne|apre|chiude)", corpo):
                 cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
             testo_ev = corpo[:cmd.start()] if cmd else corpo
+            if "__msg__" in testo_ev:
+                testo_ev = re.sub(r"\s*(?:,|\be\b)?\s*__msg__\s*", " ", testo_ev).strip()
+                if not cmd:
+                    corpo = corpo + " __msg__"
+                    cmd = re.search(r"__msg__", corpo)
             ms = re.fullmatch(r"\s*si (accende|spegne|apre|chiude)\s*", testo_ev)
             prima_tr = [t_ for r_ in rami + [cur] for t_ in r_["tr"] if str(t_.get("entity_id", "")).startswith(("light.", "switch.", "media_player.", "cover.", "fan.", "binary_sensor."))]
             if ms and prima_tr:
@@ -1163,7 +1274,10 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             seg = seg.replace("__msg__", " ")
             mob = sorted(n for n in notify if n.startswith("mobile_app_"))
             srv = mob[0] if len(mob) == 1 else "notify"
-            if len(mob) != 1:
+            chi_ = casa.dest or (io if io.startswith("person.") and len(mob) > 1 else None)
+            if chi_ and len(mob) > 1:
+                srv = telefono(casa, chi_, mob) or srv
+            if len(mob) != 1 and srv == "notify":
                 avv.append("notifica: ho messo notify.notify, scegli il tuo telefono (notify.mobile_app_...)")
             if not txt:
                 avv.append("testo della notifica scritto da Yamlic: cambialo se vuoi")
@@ -1176,7 +1290,21 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             txt = testo_msg if "__msg__" in seg else None
             seg = seg.replace("__msg__", " ")
             sat = [s for s in casa.states if core._dom(s["entity_id"]) == "assist_satellite" and casa.vivo(s)]
-            nominati = [s for s in sat if all(w in casa.testo(s) for w in _resto(seg)[:3])]
+            nominati = []
+            for s_ in sat:   # "su Casa Voce": il nome del dispositivo senza "assist satellite"
+                corto = re.sub(r"\s*assist(?:ente)?\s*satellite\s*$", "", " ".join(_n(casa.nome(s_["entity_id"])).split()))
+                mm = re.search(r"\b(?:su|sul|sulla|con|da)?\s*(?:il |la |l')?%s\b" % re.escape(corto), seg) if corto else None
+                if mm:
+                    nominati.append(s_); seg = _togli(seg, mm)
+            if not nominati:
+                nominati = [s for s in sat if all(w in casa.testo(s) for w in _resto(seg)[:3])]
+            if not txt and len(nominati) == 1:   # "annuncia su Casa Voce buongiorno a tutti": il resto e il testo
+                resto_ = " ".join(seg.replace("__msg__", " ").split()).strip(" ,")
+                resto_ = re.sub(r"^(?:e|ed)\s+", "", resto_)
+                if resto_:
+                    i_ = _n(originale).find(resto_)
+                    txt = originale[i_:i_ + len(resto_)] if i_ >= 0 else resto_
+                    txt, seg = txt[:1].upper() + txt[1:], ""
             if not txt or len(nominati) != 1:
                 return None
             azioni.append({"action": "assist_satellite.announce", "target": {"entity_id": nominati[0]["entity_id"]}, "data": {"message": txt}})
@@ -1365,6 +1493,10 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         if trs:
             rami[0] = {"tr": trs, "cond": rami[0]["cond"] + (blocco_se["if"] if len(trs) > 1 else []), "az": blocco_se["then"]}
             avv.append("non hai detto quando controllare: parte appena la condizione diventa vera")
+    if casa.domande and rami and not sospese and all(not r["tr"] and r["az"] for r in rami):
+        raise Domanda("riscrivi:" + frase_vera, "Quando deve succedere? (puoi anche scrivere l'orario, es. \"alle 20\")",
+                      [{"valore": {"testo": v + frase_vera}, "nome": n, "dettaglio": ""} for v, n in
+                       (("al tramonto ", "Al tramonto"), ("all'alba ", "All'alba"), ("quando torna qualcuno a casa ", "Quando qualcuno torna a casa"), ("scena: ", "Crea una scena da attivare a mano"))], riscrivi=True)
     if sospese or not rami or any(not r["tr"] or not r["az"] for r in rami):
         return None
     cfg = {"alias": originale if len(originale) <= 60 else originale[:59].rsplit(" ", 1)[0] + "…", "mode": "single"}

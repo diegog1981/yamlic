@@ -119,7 +119,7 @@ function risultato(j){$('q').classList.add('hide');const r=$('r');r.classList.re
  $('iv').onclick=()=>{const g=j.segn;if(!g)return;$('pt').textContent=['Versione: '+$('ver').textContent,'Richiesta: '+g.prompt,'','YAML:',g.yaml,'','Avvisi: '+((g.problems&&g.problems.length)?g.problems.join(' | '):'nessuno')].join('\n');$('pm').textContent='';$('pv').classList.remove('hide')};
  $('no').onclick=()=>$('pv').classList.add('hide');
  $('ok').onclick=async()=>{$('ok').disabled=true;try{const x=await (await fetch('api/segnala',{method:'POST',body:JSON.stringify({segn:j.segn,via:(j.stats||{}).via,nota:$('nt').value})})).json();$('pm').textContent=x.ok?'Inviata, grazie':(x.error||'errore');if(x.ok)setTimeout(()=>$('pv').classList.add('hide'),1500)}catch(e){$('pm').textContent='errore'}$('ok').disabled=false};
- $('sv').onclick=async()=>{const x=await (await fetch('api/create',{method:'POST',body:JSON.stringify({yaml:j.yaml})})).json();$('msg').textContent=x.ok?'Salvata in Home Assistant':(x.error||'errore')}}
+ $('sv').onclick=async()=>{const x=await (await fetch('api/create',{method:'POST',body:JSON.stringify({yaml:j.yaml})})).json();$('msg').textContent=x.ok?(x.tipo=='scena'?'Scena salvata in Home Assistant':'Salvata in Home Assistant'):(x.error||'errore')}}
 function domandaMicro(d,fatte){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
  let h='<b>'+esc(d.testo)+'</b>';
  d.opzioni.forEach((o,i)=>{h+='<label><input type='+(d.multi?'checkbox':'radio')+' class=ck name=o value='+i+'><span>'+esc(o.nome)+(o.dettaglio?'<br><span class=id>'+esc(o.dettaglio)+'</span>':'')+'</span></label>'});
@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.10"
+VERSIONE = "0.4.11"
 _RETE = {"t": 0, "v": None}
 
 
@@ -368,15 +368,19 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
         return None
     r["avvisi"] += ["controllo finale: " + e for e in errori]   # con le tue scelte: te lo dico, non butto via
     known = {s_["entity_id"] for s_ in states}
-    y, imp = core.impulsi(r["yaml"])
-    problems = core.validate(y, known, prompt, remote=False) + r["avvisi"] + imp + core.domini_mancanti(states, prompt)
+    if r.get("scena"):
+        y, imp = r["yaml"], []
+        problems = list(r["avvisi"])
+    else:
+        y, imp = core.impulsi(r["yaml"])
+        problems = core.validate(y, known, prompt, remote=False) + r["avvisi"] + imp + core.domini_mancanti(states, prompt)
     try:
         an = core.Anon(core.select_entities(states, prompt, io)[0], prompt, [(s_.get("attributes") or {}).get("friendly_name", "") for s_ in states])
         segn = {"prompt": an.prompt, "yaml": an.forward_yaml(y), "problems": [an.forward_yaml(x) for x in problems]}
     except Exception:
         segn = None
     via = "regole locali" + (" + " + ", ".join(sorted(set(vie))) if vie else "")
-    return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": not errori, "errori": errori},
+    return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": not errori, "errori": errori}, "tipo": "scena" if r.get("scena") else "automazione",
             "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": None, "correzioni": 0}}
 
 
@@ -788,11 +792,19 @@ def create(y):
     if not flag("allow_create"):
         return 403, {"error": "Creazione disattivata (allow_create = false)."}
     import yaml
-    probs = core.validate(y, {s["entity_id"] for s in ha("/states")}, "", remote=True)
+    cfg = yaml.safe_load(y)
+    known = {s["entity_id"] for s in ha("/states")}
+    cid = str(int(time.time() * 1000))
+    if isinstance(cfg, dict) and isinstance(cfg.get("entities"), dict) and "triggers" not in cfg:   # scena
+        ignote = [e for e in cfg["entities"] if e not in known]
+        if ignote or not cfg.get("name"):
+            return 400, {"error": "scena non valida", "problems": ["entita inesistenti: " + ", ".join(ignote)] if ignote else ["manca il nome"]}
+        ha("/config/scene/config/" + cid, {"id": cid, "name": str(cfg["name"]), "entities": cfg["entities"]})
+        return 200, {"ok": True, "id": cid, "tipo": "scena"}
+    probs = core.validate(y, known, "", remote=True)
     if probs:
         return 400, {"error": "non valida", "problems": probs}
-    cid = str(int(time.time() * 1000))
-    ha("/config/automation/config/" + cid, yaml.safe_load(y))
+    ha("/config/automation/config/" + cid, cfg)
     return 200, {"ok": True, "id": cid}
 
 

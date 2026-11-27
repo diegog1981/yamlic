@@ -119,6 +119,12 @@ def racconta(y, states):
     try:
         cfg = yaml.safe_load(y)
         casa = micro.Casa(states)
+        if isinstance(cfg.get("entities"), dict) and not cfg.get("triggers"):   # scena
+            verbi = {"off": "spengo", "on": "accendo", "closed": "chiudo", "open": "apro"}
+            per = {}
+            for e, st in cfg["entities"].items():
+                per.setdefault(verbi.get(str(st), "imposto"), []).append(casa.nome(e))
+            return "%s (scena, la attivi tu):\n" % cfg.get("name", "Scena") + "\n".join("  %s %s" % (v, ", ".join(n)) for v, n in per.items())
         trig = micro._lista(cfg.get("triggers") or cfg.get("trigger"))
         con_id = any(t.get("id") for t in trig)
         righe = ["Quando:"] + ["  " + ("%s) " % str(t["id"]).replace("ramo", "") if con_id and t.get("id") else "") + trigger(t, casa) for t in trig]
