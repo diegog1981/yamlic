@@ -274,6 +274,15 @@ _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?
 
 def bersagli(frase, casa, avv, verbo=None):
     """Ritorna (lista di entita, frase residua)."""
+    detto = re.sub(r"^\s*(?:(?:il|lo|la|i|gli|le)\s+|l')?", "", " ".join(frase.split()))
+    esatti = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) in ("light", "switch", "fan") and casa.vivo(s_)
+              and " ".join(_n(casa.nome(s_["entity_id"])).split()) == detto]
+    if len(esatti) == 1 and len(detto.split()) >= 2:   # nome detto per intero
+        return esatti, ""
+    for s_ in casa.states:   # "la luce ingresso bagno" = il dispositivo "Ingresso bagno": "luce" non e un secondo bersaglio
+        nm = " ".join(_n(casa.nome(s_["entity_id"])).split())
+        if core._dom(s_["entity_id"]) in ("light", "switch") and len(nm.split()) >= 2 and casa.vivo(s_) and not re.search(r"\bluc[ei]\b", nm):
+            frase = re.sub(r"\bluce (?=%s\b(?! (?:camera|salotto|cucina)))" % re.escape(nm), "", frase)
     ids, frase = apparecchi(frase, casa, avv)
     if ids is None:
         return None, frase
@@ -456,6 +465,12 @@ def evento(testo, casa, io, avv):
         dove = (m or m2).group(1)
         e = binario(casa, ("motion", "occupancy"), dove)
         return fine({"trigger": "state", "entity_id": e, "to": "on" if m else "off"}) if e else None
+    if re.fullmatch(r"(?:il )?(?:robot|aspirapolvere)(?: aspirapolvere)? (?:si (?:e' |e )?)?(?:e' |e )?(?:fermato|ferma|bloccato|blocca)", t):
+        rb = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "vacuum" and casa.vivo(s)]
+        if len(rb) != 1:
+            return None
+        avv.append("robot fermo = passa da pulizia a pausa, errore o inattivo (il rientro normale alla base non conta)")
+        return fine({"trigger": "state", "entity_id": rb[0], "from": "cleaning", "to": ["paused", "error", "idle"]})
     porta = porta_finestra(t, casa)
     if porta:
         return fine({"trigger": "state", "entity_id": porta[0], "to": porta[1]})
@@ -528,7 +543,14 @@ def evento(testo, casa, io, avv):
 def condizione(testo, casa, avv):
     """'la tv del soggiorno e' accesa' / 'c'e' qualcuno in casa'"""
     t = " ".join(testo.split())
-    if re.fullmatch(r"(?:non c'e' nessuno|non c'e nessuno|la casa e' vuota)(?: in casa| a casa)?", t):
+    if re.fullmatch(r"(?:fuori )?(?:sta )?(?:piove(?:ndo)?)(?: fuori)?", t):
+        w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
+        if not w:
+            avv.append("per la pioggia serve un'entita meteo, in casa non la trovo")
+            return None
+        avv.append("pioggia presa dal meteo (%s): sono previsioni online, non un sensore" % casa.nome(w[0]))
+        return {"condition": "state", "entity_id": w[0], "state": ["rainy", "pouring"]}
+    if re.fullmatch(r"(?:non c'e' nessuno|non c'e nessuno|la casa e' vuota|(?:noi )?siamo (?:tutti )?(?:fuori(?: casa| di casa)?|via)|non siamo (?:a|in) casa)(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "below": 1}
     if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' )(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "above": 0}
@@ -591,6 +613,13 @@ def significato(p, casa):
             if m:
                 raise Domanda("riscrivi:" + m.group(0), "\"%s\": a che ora?" % testo,
                               [{"valore": {"testo": v}, "nome": n, "dettaglio": ""} for v, n in scelte], riscrivi=True)
+    m = re.fullmatch(r"(?:lascia|tieni) (.+?) acces([ao]) (?:di notte|la notte|tutta la notte|durante la notte)", p)
+    if m:
+        cosa, o = m.group(1), m.group(2)
+        raise Domanda("riscrivi:" + p, "\"Di notte\": da quando a quando?",
+                      [{"valore": {"testo": "al tramonto accendi %s e all'alba spegni %s" % (cosa, cosa)}, "nome": "Dal tramonto all'alba", "dettaglio": ""},
+                       {"valore": {"testo": "alle 22 accendi %s e alle 7 spegni %s" % (cosa, cosa)}, "nome": "Dalle 22 alle 7", "dettaglio": ""},
+                       {"valore": {"testo": "alle 0 accendi %s e alle 6 spegni %s" % (cosa, cosa)}, "nome": "Da mezzanotte alle 6", "dettaglio": ""}], riscrivi=True)
     m = re.search(r"\bfa (freddo|caldo)\b", p)
     if m:
         ha = any(casa.classe(s) == "temperature" and casa.vivo(s) and not re.search(r"batter|cpu", casa.testo(s)) for s in casa.states)
@@ -677,6 +706,14 @@ def parlato(p):
         p = re.sub(da, a_, p)
     p = re.sub(r"\b(alle \d{1,2}(?:[:.]\d\d)?) (?:tutte le sere|tutti i giorni|ogni giorno)\b", r"\1", p)
     p = re.sub(r"\b(luce|luci)( (?:del|della|dell') ?\w+) e (?=(?:del|della|dell')\b)", r"\1\2 e le luci ", p)
+    p = re.sub(r"\b((?:ri)?(?:accendi|spegni|apri|chiudi|avvia|ferma)) (?=(?:luci|tende|tapparelle|faretti)\b)", lambda m: m.group(1) + (" i " if p[m.end():].startswith("faretti") else " le "), p)
+    p = re.sub(r"\b((?:ri)?(?:avvia|ferma)) (?=(?:robot|aspirapolvere)\b)", r"\1 il ", p)
+    p = " ".join(p.split())
+    # "se sono le 22 (e sono ancora aperte)": e un orario; chiudere cio che e gia chiuso non fa nulla
+    ms = re.search(r"\bse sono le (\d{1,2}(?:[:.]\d\d)?)\b(?: e (?:le tende |le tapparelle )?sono (?:ancora )?(?:aperte|accese|accesi))?", p)
+    if ms and re.search(r"\b(?:chiudi|spegni)\b", p):
+        p = "alle %s %s" % (ms.group(1), (p[:ms.start()] + p[ms.end():]).strip(" ,"))
+    p = re.sub(r"^(avvisami|avvertimi|mandami una notifica) se (.*(?:fermat\w+|si ferma|bloccat\w+))$", r"quando \2 \1", p)
     p = " ".join(p.split())
     # "le tende di cucina e soggiorno" -> una frase completa per stanza
     r_ = "|".join(STANZE)
@@ -720,12 +757,54 @@ def descrivi(azioni, casa):
     return " + ".join(out)
 
 
+def da_condizioni(cs):
+    """"se A e B fai X": un trigger per ogni condizione che diventa vera. None se una non si sa trasformare."""
+    out = []
+    for c in cs:
+        k = c.get("condition")
+        if k == "numeric_state":
+            out.append({"trigger": "numeric_state", **{x: c[x] for x in ("entity_id", "above", "below") if x in c}})
+        elif k == "state" and c.get("entity_id") == "sun.sun":
+            out.append({"trigger": "sun", "event": "sunset" if c["state"] == "below_horizon" else "sunrise"})
+        elif k == "state":
+            out.append({"trigger": "state", "entity_id": c["entity_id"], "to": c["state"]})
+        else:
+            return None
+    return out
+
+
+_PRESENZA = r"\b(?:simul\w+\b.*\bpresenza|presenza simulata|(?:random|a caso|casual\w*)\b.*\b(?:luc[ei])|luc[ei]\b.*\b(?:random|a caso|casual\w*))"
+
+
+def presenza(prompt, casa):
+    """Simulazione di presenza: le luci le sceglie sempre l'utente."""
+    p = " ".join(_n(prompt).split())
+    if not re.search(_PRESENZA, p) or not re.search(r"fuori|\bvia\b|vacanza|non (?:c'e|ci siamo|siamo)|nessuno|vuota|presenza", p):
+        return None
+    if re.search(r"\balle\b|\bdalle\b|tranne|ogni \d", p):
+        return None
+    scelta = (casa.risposte.get("presenza:luci") or {}).get("entita")
+    if not scelta:
+        if not casa.domande:
+            return None
+        raise Domanda("presenza:luci", "Quali luci accendo e spengo a caso quando non c'e nessuno?", _opz(casa, sorted(casa.luci(), key=casa.nome)), multi=True)
+    scelta = [e for e in scelta if re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", str(e))]
+    cfg = {"alias": "Simulazione presenza", "mode": "single",
+           "triggers": [{"trigger": "time_pattern", "minutes": "/20"}],
+           "conditions": [{"condition": "numeric_state", "entity_id": "zone.home", "below": 1}, {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}],
+           "actions": [{"delay": {"minutes": "{{ range(0, 10) | random }}"}},
+                       {"action": "homeassistant.toggle", "target": {"entity_id": "{{ [%s] | random }}" % ", ".join("'%s'" % e for e in scelta)}}]}
+    avv = ["ogni 20-30 minuti circa cambio stato a una luce a caso tra: %s" % ", ".join(casa.nome(e) for e in scelta),
+           "solo con casa vuota e quando e buio; al rientro le luci restano come sono"]
+    return {"yaml": yaml.dump(cfg, Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=1000).rstrip("\n"), "avvisi": avv, "modello": 0, "frase": prompt, "fisso": True}
+
+
 def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False, memoria=None):
     """Come _costruisci; con domande=True un pezzo dubbio diventa {"domanda": ...} invece di None."""
     casa = Casa(states)
     casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
     try:
-        r = _costruisci(prompt, casa, notify, io, chiedi)
+        r = presenza(prompt, casa) or _costruisci(prompt, casa, notify, io, chiedi)
     except Domanda as d:
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
@@ -828,7 +907,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                 m = re.match(r"se\b\s*(.*)$", seg)
         if m:
             corpo = m.group(1)
-            cmd = re.search(r"(?<!si )\b(?!(?:apro|apre|chiudo|chiude|accendo|accende|spengo|spegne|avvio|avvia il ciclo)\b)(?:(?:%s|metti|imposta)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
+            cmd = re.search(r"(?<!si )\b(?!(?:fermat[oa]|bloccat[oa]|apro|apre|chiudo|chiude|accendo|accende|spengo|spegne|avvio|avvia il ciclo)\b)(?:(?:%s|metti|imposta)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
             if cmd and re.match(r"si (?:accende|spegne|apre|chiude)", corpo):
                 cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
             testo_ev = corpo[:cmd.start()] if cmd else corpo
@@ -1087,6 +1166,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
     chiudi()
     if ramo_else is not None and not ramo_else:
         return None
+    if not sospese and len(rami) == 1 and not rami[0]["tr"] and len(rami[0]["az"]) == 1 and set(rami[0]["az"][0]) == {"if", "then"}:
+        blocco_se = rami[0]["az"][0]
+        trs = da_condizioni(blocco_se["if"])
+        if trs:
+            rami[0] = {"tr": trs, "cond": rami[0]["cond"] + blocco_se["if"], "az": blocco_se["then"]}
+            avv.append("non hai detto quando controllare: parte appena la condizione diventa vera")
     if sospese or not rami or any(not r["tr"] or not r["az"] for r in rami):
         return None
     cfg = {"alias": originale if len(originale) <= 60 else originale[:59].rsplit(" ", 1)[0] + "…", "mode": "single"}

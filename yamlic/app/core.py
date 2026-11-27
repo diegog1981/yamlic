@@ -920,7 +920,7 @@ def merge_entities(y):
 
 # ---------- validatore ----------
 TRIGGERS = {"state", "numeric_state", "time", "time_pattern", "sun", "homeassistant", "event", "zone", "template", "device"}
-SERVICES = {"assist_satellite": {"announce"},
+SERVICES = {"assist_satellite": {"announce"}, "homeassistant": {"toggle", "turn_on", "turn_off"},
     "light": {"turn_on", "turn_off", "toggle"}, "switch": {"turn_on", "turn_off", "toggle"},
     "cover": {"open_cover", "close_cover", "stop_cover", "set_cover_position", "toggle"},
     "climate": {"set_hvac_mode", "set_temperature", "turn_on", "turn_off"},
@@ -1019,9 +1019,11 @@ def validate(y, known, prompt="", remote=False):
                 elif SERVICES[dom] is not None and name not in SERVICES[dom]:
                     p.append("servizio inesistente: %s" % svc)
                 for e in _target_ents(a):
+                    if "{{" in str(e):
+                        continue
                     if e not in known:
                         p.append("entita inesistente: %s" % e)
-                    elif dom in SERVICES and dom not in {"notify", "scene", "script"} and _dom(e) != dom:
+                    elif dom in SERVICES and dom not in {"notify", "scene", "script", "homeassistant"} and _dom(e) != dom:
                         p.append("entita %s non adatta a %s" % (e, svc))
                 if dom != "notify" and not _target_ents(a):
                     p.append("azione senza target: %s" % svc)
@@ -1725,3 +1727,53 @@ def ibrido(y, states, prompt):
         return P.compila(p, ids), avv
     except Exception as ex:
         return y, ["controllo del piano non riuscito: %s" % str(ex)[:80]]
+
+
+# ================= 0.3.41: blocco di sicurezza =================
+_VUOTE = {"casa", "quando", "appena", "accendi", "spegni", "apri", "chiudi", "avvia", "ferma", "partire", "lascia", "accesa", "acceso", "spenta", "spento", "della", "delle", "degli", "dello", "nella", "nelle", "alle", "sono", "siamo", "fuori", "nessuno", "qualcuno", "notte", "giorno", "sera", "mattina", "tutte", "tutti", "dopo", "prima", "ancora", "invece", "altrimenti", "solo", "come", "avvisami"}
+_CATEGORIE = ((r"luc[ei]\b|lampad|farett|illumin|\bled\b", ("light", "switch")), (r"\btend|tapparell|serrand|garage|cancell", ("cover",)),
+              (r"\btv\b|\btele\b|televis|musica|radio|volume|cassa|speaker", ("media_player",)), (r"robot|aspirapolvere", ("vacuum",)),
+              (r"ventil", ("fan",)), (r"termostat|clima|condizionat|riscaldament|gradi", ("climate",)), (r"serratur|blocca", ("lock",)), (r"annunci|\bdi'", ("assist_satellite",)))
+
+
+def _azioni_tutte(n):
+    if isinstance(n, dict):
+        if "action" in n:
+            yield n
+        for v in n.values():
+            yield from _azioni_tutte(v)
+    elif isinstance(n, list):
+        for v in n:
+            yield from _azioni_tutte(v)
+
+
+def blocco(y, prompt, states, scelte=()):
+    """Motivi per NON consegnare lo YAML: comandi o entita inventati, oppure bersagli che non c'entrano con la richiesta."""
+    try:
+        docs = [d for d in yaml.safe_load_all(y) if isinstance(d, dict)]
+    except Exception:
+        return ["lo YAML non e leggibile"]
+    note = {s["entity_id"]: s for s in states}
+    p = " ".join(prompt.lower().replace("’", "'").split())
+    parole = {w[:-1] for w in re.findall(r"[a-z]{4,}", p) if w not in _VUOTE}
+    cat = {d for rx, ds in _CATEGORIE if re.search(rx, p) for d in ds}
+    motivi = []
+    for a in _azioni_tutte(docs):
+        dom, _, nome = str(a["action"]).partition(".")
+        if dom not in SERVICES or not nome or (SERVICES[dom] is not None and nome not in SERVICES[dom]):
+            motivi.append("comando inesistente: %s" % a["action"])
+        for e in _target_ents(a):
+            if "{{" in str(e) or dom == "notify":
+                continue
+            if e not in note:
+                motivi.append("entita inesistente: %s" % e)
+                continue
+            if e in scelte or re.search(r"\btutt[oaie]\b", p) or _dom(e) in cat - {"switch", "light"}:
+                continue
+            testo = _t(note[e]).lower()
+            if any(w in testo for w in parole):
+                continue
+            if _dom(e) in cat and (_dom(e) != "switch" or is_light_like(e, testo)):
+                continue
+            motivi.append("\"%s\" non c'entra con la richiesta" % ((note[e].get("attributes") or {}).get("friendly_name") or e))
+    return list(dict.fromkeys(motivi))

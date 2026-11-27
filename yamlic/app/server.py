@@ -126,7 +126,7 @@ function domandaMicro(d,fatte){$('r').classList.add('hide');const q=$('q');q.cla
  if(d.ricorda)h+='<label><input type=checkbox id=rc checked><span>Ricorda questa scelta</span></label>';
  h+='<div class=row><button id=ok type=button>Continua</button><button class=s type=button id=sk>Nessuna: prova senza domande</button></div>';q.innerHTML=h;
  $('ok').onclick=()=>{const t=d.riscrivi?$('rs').value.trim():'';const s=[...q.querySelectorAll('.ck:checked')].map(c=>d.opzioni[+c.value].valore);let v=null;
-  const w=s.find(x=>x.testo);if(t)v={testo:t};else if(w)v=w;else if(s.length){const a=s.find(x=>x.azioni);v=a?a:{entita:s.flatMap(x=>x.entita)};if(!a&&d.ricorda&&$('rc').checked)v.ricorda=d.ricorda}
+  const w=s.find(x=>x.testo||x.yaml_ai);if(t)v={testo:t};else if(w)v=w;else if(s.length){const a=s.find(x=>x.azioni);v=a?a:{entita:s.flatMap(x=>x.entita)};if(!a&&d.ricorda&&$('rc').checked)v.ricorda=d.ricorda}
   if(v)gen({risposte:Object.assign({},fatte,{[d.chiave]:v})})};
  $('sk').onclick=()=>gen({salta_micro:true});q.scrollIntoView({behavior:'smooth',block:'nearest'})}
 function domanda(d){$('r').classList.add('hide');const q=$('q');q.classList.remove('hide');
@@ -230,7 +230,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.40"
+VERSIONE = "0.3.41"
 _RETE = {"t": 0, "v": None}
 
 
@@ -300,8 +300,11 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
     if not r:
         return None
     if "domanda" in r:
-        return {"domanda": r["domanda"], "risposte": risposte or {}}
-    errori = verifica.controlla(r["frase"], r["yaml"], states)
+        d = r["domanda"]
+        if str(d.get("chiave", "")).startswith("riscrivi:") and not d.get("opzioni") and flag("proposta_ai", True):
+            _proponi(d, prompt, states, persona)
+        return {"domanda": d, "risposte": risposte or {}}
+    errori = [] if r.get("fisso") else verifica.controlla(r["frase"], r["yaml"], states)
     if errori and not risposte:   # il controllo finale non passa: meglio il metodo classico
         return None
     r["avvisi"] += ["controllo finale: " + e for e in errori]   # con le tue scelte: te lo dico, non butto via
@@ -316,6 +319,21 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
     via = "regole locali" + (" + " + ", ".join(sorted(set(vie))) if vie else "")
     return {"segn": segn, "yaml": y, "problems": problems, "controllo": {"ok": not errori, "errori": errori},
             "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": None, "correzioni": 0}}
+
+
+def _proponi(d, prompt, states, persona):
+    """Le regole non bastano: l'AI scrive l'automazione, noi la controlliamo; se regge diventa una proposta da confermare."""
+    try:
+        r = _genera_uno(prompt, None, persona, True, states, micro_chiamata=True)
+        y = r.get("yaml")
+        if not y or not (r.get("controllo") or {}).get("ok") or core.blocco(y, prompt, states) or core.validate(y, {s["entity_id"] for s in states}, prompt):
+            return
+        testo = " / ".join(x.strip() for x in racconto.racconta(y, states).splitlines() if x.strip())
+        d["opzioni"] = [{"valore": {"yaml_ai": y}, "nome": "Si, intendevo questo", "dettaglio": testo}]
+        d["testo"] = "Non sono sicuro. Con l'AI ho capito questo: e giusto? Se no, riscrivi la frase."
+        d["multi"] = False
+    except Exception as ex:
+        print("proposta AI: %s" % str(ex)[:120], flush=True)
 
 
 def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_chiamata=False):
@@ -483,7 +501,17 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
 
 
 def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=None, salta_micro=False):
-    r = _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro)
+    proposta = next((v for v in (risposte or {}).values() if isinstance(v, dict) and v.get("yaml_ai")), None) if isinstance(risposte, dict) else None
+    if proposta:
+        r = {"yaml": str(proposta["yaml_ai"])[:6000], "problems": ["automazione proposta dall'AI e scelta da te: rileggila"], "segn": None,
+             "stats": {"secondi": 0, "via": "proposta AI", "token_risposta": None, "correzioni": 0}}
+    else:
+        r = _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro)
+    if r.get("yaml"):
+        usate = [e for v in (risposte or {}).values() if isinstance(v, dict) for e in (v.get("entita") or [])] + list(scelte or [])
+        motivi = core.blocco(r["yaml"], prompt + " " + " ".join(str((v or {}).get("testo") or "") for v in (risposte or {}).values() if isinstance(v, dict)), _stati(stati, grezzi=True), usate)
+        if motivi and not (usate and all("non c'entra" in m for m in motivi)):
+            return {"error": "Non sono riuscito a creare un'automazione affidabile, quindi non te la do. Prova a riscrivere la richiesta", "problems": motivi}
     if r.get("yaml"):
         try:
             r["riassunto"] = racconto.racconta(r["yaml"], _stati(stati, grezzi=True))
