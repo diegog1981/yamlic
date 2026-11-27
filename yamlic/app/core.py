@@ -1777,3 +1777,20 @@ def blocco(y, prompt, states, scelte=()):
                 continue
             motivi.append("\"%s\" non c'entra con la richiesta" % ((note[e].get("attributes") or {}).get("friendly_name") or e))
     return list(dict.fromkeys(motivi))
+
+
+def coerente(y, prompt):
+    """La proposta dell'AI deve parlare di quello che hai chiesto (e non aggiungere eventi mai detti)."""
+    p = " ".join(prompt.lower().replace("’", "'").split())
+    t = y[y.find("triggers:"):]
+    for rx, ok in ((r"robot|aspirapolvere", r"vacuum\."), (r"\btv\b|televis", r"media_player\."), (r"\btend|tapparell|serrand", r"cover\."),
+                   (r"\bluc[ei]\b|farett|lampad", r"(?:light|switch)\."), (r"avvis|notific", r"notify"),
+                   (r"\d+ ?(?:minut|second|or[ae])|un'ora|mezz'ora", r"\bfor:|delay|offset|time_pattern"), (r"cancell", r"cancell"),
+                   (r"piov|pioggia|vento|meteo", r"weather\.|rain|pioggia"), (r"tramonto|\balba\b|\bbuio\b|\bnotte\b", r"sun|after:|before:|at:")):
+        if re.search(rx, p) and not re.search(ok, t):
+            return False
+    if "zone.home" in t and not re.search(r"nessuno|qualcuno|tutti|casa|\besco|escono|torn|rientr|arriv|via\b|vacanza|presenza", p):
+        return False
+    if re.search(r"robot|aspirapolvere", p) and re.search(r"finit|fermat|bloccat", p) and not re.search(r"trigger: state\n\s*entity_id: vacuum", t):
+        return False
+    return True

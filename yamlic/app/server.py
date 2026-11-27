@@ -230,7 +230,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.41"
+VERSIONE = "0.3.42"
 _RETE = {"t": 0, "v": None}
 
 
@@ -326,7 +326,7 @@ def _proponi(d, prompt, states, persona):
     try:
         r = _genera_uno(prompt, None, persona, True, states, micro_chiamata=True)
         y = r.get("yaml")
-        if not y or not (r.get("controllo") or {}).get("ok") or core.blocco(y, prompt, states) or core.validate(y, {s["entity_id"] for s in states}, prompt):
+        if not y or not (r.get("controllo") or {}).get("ok") or core.blocco(y, prompt, states) or not core.coerente(y, prompt) or core.validate(y, {s["entity_id"] for s in states}, prompt):
             return
         testo = " / ".join(x.strip() for x in racconto.racconta(y, states).splitlines() if x.strip())
         d["opzioni"] = [{"valore": {"yaml_ai": y}, "nome": "Si, intendevo questo", "dettaglio": testo}]
