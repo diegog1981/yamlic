@@ -19,7 +19,7 @@ def carica():
             d = json.load(f)
     except Exception:
         d = {}
-    return {"entita": d.get("entita") or {}, "memoria": d.get("memoria") or {}, "md": d.get("md") or ""}
+    return {"entita": d.get("entita") or {}, "memoria": d.get("memoria") or {}, "md": d.get("md") or "", "stanze": d.get("stanze") or []}
 
 
 def _salva(d):
@@ -37,14 +37,52 @@ def correggi(entita):
             pulito = {}
             if isinstance(v, dict):
                 pulito = {k: str(v[k]).strip()[:40] for k in ("funzione", "stanza", "nome") if str(v.get(k) or "").strip()}
-                if v.get("ignora"):
-                    pulito["ignora"] = True
+                for k in ("ignora", "diverso"):
+                    if v.get(k):
+                        pulito[k] = True
             if pulito:
                 d["entita"][str(e)] = pulito
             else:
                 d["entita"].pop(str(e), None)
         _salva(d)
         return d
+
+
+_CAMPI = ("funzione", "stanza", "nome", "ignora", "diverso")
+
+
+def aggiorna(patch):
+    """Cambia solo i campi indicati ("" o None = toglie il campo)."""
+    with _LOCK:
+        d = carica()
+        for e, v in (patch or {}).items():
+            if not isinstance(v, dict):
+                continue
+            c = dict(d["entita"].get(str(e)) or {})
+            for k in _CAMPI:
+                if k in v:
+                    x = v[k]
+                    if x in (None, "", False):
+                        c.pop(k, None)
+                    else:
+                        c[k] = True if k in ("ignora", "diverso") else str(x).strip()[:40]
+            if c:
+                d["entita"][str(e)] = c
+            else:
+                d["entita"].pop(str(e), None)
+        _salva(d)
+        return d
+
+
+def aggiungi_stanza(nome):
+    nome = " ".join(str(nome or "").split())[:40]
+    if not nome:
+        return
+    with _LOCK:
+        d = carica()
+        if nome.lower() not in [x.lower() for x in d["stanze"]]:
+            d["stanze"].append(nome)
+        _salva(d)
 
 
 def ricorda(risposte):
@@ -163,7 +201,8 @@ def applica(states, dati, prompt=""):
         if c.get("funzione"):
             a["_funzione"] = c["funzione"]
         if c.get("stanza"):
-            a["_area"] = c["stanza"]
+            a["_area"] = "" if c["stanza"] == "nessuna" else c["stanza"]
+            a["_stanza_utente"] = True
         if c.get("nome"):
             a["_soprannome"] = c["nome"]
         out.append(dict(s, attributes=a) if c else s)

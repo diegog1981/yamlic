@@ -205,6 +205,9 @@ class Casa:
         gruppi = set()
         for r in stanze:
             gruppi |= core.room_words(r)
+        a = (self.by.get(e) or {}).get("attributes") or {}
+        if a.get("_stanza_utente") and _n(a.get("_area", "")) in gruppi:   # la stanza l'ha scelta l'utente: nessun dubbio
+            return False
         nm = _n(self.nome(e))
         return any(re.search(r"\b%s\b" % r, nm) for r in STANZE if r not in gruppi and r not in ("isola", "tavolo", "esterno"))
 

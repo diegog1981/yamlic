@@ -50,6 +50,7 @@ h1{margin:0;font-size:1.5em}h1 small{font-weight:400;color:var(--mu);font-size:.
 textarea{width:100%;font:inherit;color:var(--tx);background:var(--code);border:1px solid var(--bd);border-radius:10px;padding:.7em;resize:vertical}
 textarea:focus{outline:2px solid var(--ac)}
 button{font:inherit;border:0;border-radius:10px;padding:.6em 1.1em;cursor:pointer;background:var(--ac);color:#fff;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:.4em;margin:.3em 0}.chips button{padding:.5em .8em}
 button.s{background:var(--code);color:var(--tx);border:1px solid var(--bd);font-weight:500}button:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:.6em;align-items:center;flex-wrap:wrap;margin-top:.7em}
 pre{margin:.6em 0 0;padding:.9em;background:var(--code);border-radius:10px;overflow:auto;font:13.5px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre}
@@ -147,30 +148,50 @@ async function gen(extra){if(busy||!$('p').value.trim())return;busy=true;$('b').
 $('b').onclick=()=>gen();
 const FUNZ=['','luce','presa','interruttore','elettrodomestico','tenda','TV','audio','cancello/portone','ventilatore'];
 const CAMPO='style="width:100%;font:inherit;padding:.4em;margin:.2em 0;border-radius:8px;border:1px solid var(--bd);background:var(--code);color:var(--tx)"';
-function scheda(v){const m=v.mia||{},sc=STANZE.includes(m.stanza||'')||!m.stanza;
- const fz='<select class=fz '+CAMPO+'>'+FUNZ.map(f=>'<option value="'+f+'"'+((m.funzione||'')==f?' selected':'')+'>'+(f?f:'Cos\'è: '+(v.funzione&&v.funzione!='interruttore'?v.funzione+' (automatico)':'non so'))+'</option>').join('')+'<option value="__no"'+(m.ignora?' selected':'')+'>Non usare</option></select>';
- const sz='<select class=sz '+CAMPO+'><option value="">Stanza: '+esc(v.stanze&&v.stanze.length?v.stanze.join(', ')+' (automatica)':'non so')+'</option>'+STANZE.map(r=>'<option'+(m.stanza==r?' selected':'')+'>'+esc(r)+'</option>').join('')+'<option value="__altra"'+(!sc?' selected':'')+'>Altra...</option></select><input class=sa '+CAMPO+' placeholder="nome della stanza" value="'+esc(!sc?m.stanza:'')+'" style="display:'+(!sc?'block':'none')+'">';
- return '<div class=ve data-id="'+esc(v.id)+'" style="border-top:1px solid var(--bd);padding:.5em 0"><b>'+esc(v.nome)+'</b>'+(v.dubbi&&v.dubbi.length?' <span class=mu>&middot; '+esc(v.dubbi.join('; '))+'</span>':'')
- +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4em">'+fz+'<div>'+sz+'</div></div>'
- +'<details><summary class=mu>Come lo chiami tu (facoltativo)</summary><input class=sn '+CAMPO+' placeholder="es. luce del bagno" value="'+esc(m.nome||'')+'"></details></div>'}
-let STANZE=[];
-function mostraCasa(j){const h=$('hm');if(j.error){h.innerHTML=esc(j.error);return}
- STANZE=j.stanze||[];
- const dub=j.voci.filter(v=>v.stato=='dubbia'),altre=j.voci.filter(v=>v.stato!='dubbia');
- let x='<b>La tua casa</b><p class=mu>Resta sul tuo Home Assistant. Compila solo quello che serve. Chiare: '+(j.conta.ok||0)+', dubbie: '+(j.conta.dubbia||0)+', tecniche nascoste: '+(j.conta.tecnica||0)+'.</p>';
- x+='<div class=g>Da chiarire ('+dub.length+')</div>'+dub.map(scheda).join('');
- const gr={};altre.forEach(v=>{const k=(v.mia&&v.mia.stanza)||(v.stanze&&v.stanze[0])||'senza stanza';(gr[k]=gr[k]||[]).push(v)});
- x+='<div class=g>Già chiare (controlla se vuoi)</div>'+Object.keys(gr).sort().map(k=>'<details><summary>'+esc(k)+' ('+gr[k].length+')</summary>'+gr[k].map(scheda).join('')+'</details>').join('');
- if(j.memoria.length)x+='<div class=g>Scelte che ricordo</div>'+j.memoria.map(m=>'<div class=row><span>'+esc(m.testo)+' &rarr; '+esc(m.scelta)+'</span><button type=button class="s dm" data-k="'+esc(m.chiave)+'">Dimentica</button></div>').join('');
- h.innerHTML=x+'<div class=row><button id=hs type=button>Salva</button><button id=hc type=button class=s>Chiudi</button><span id=hmsg class=mu></span></div>';
- const prima={};h.querySelectorAll('.ve').forEach(d=>{prima[d.dataset.id]=leggi(d);const z=d.querySelector('.sz');z.onchange=()=>{d.querySelector('.sa').style.display=z.value=='__altra'?'block':'none'}});
- $('hc').onclick=()=>h.classList.add('hide');
- $('hs').onclick=async()=>{const ent={};h.querySelectorAll('.ve').forEach(d=>{const v=leggi(d);if(JSON.stringify(v)!=JSON.stringify(prima[d.dataset.id]))ent[d.dataset.id]=v});
-  mostraCasa(await casaApi({entita:ent}));$('hmsg')&&($('hmsg').textContent='Salvato')};
- h.querySelectorAll('.dm').forEach(b=>b.onclick=async()=>mostraCasa(await casaApi({dimentica:b.dataset.k})));}
-function leggi(d){const f=d.querySelector('.fz').value,z=d.querySelector('.sz').value;return {funzione:f=='__no'?'':f,stanza:z=='__altra'?d.querySelector('.sa').value.trim():z,nome:d.querySelector('.sn').value.trim(),ignora:f=='__no'}}
+const FUNZ_B=[['luce','Luce'],['presa','Presa'],['tenda','Tenda'],['elettrodomestico','Elettrodomestico'],['TV','TV'],['audio','Audio'],['interruttore','Altro']];
+let J=null,MODO='riepilogo',SALTATE=new Set(),STORIA=[],APERTA='';
+const kq=q=>q.tipo+':'+(q.ids||[q.id]).join(',');
+const bt=(t,a,c)=>`<button type=button class="${c||'s'} cb2" data-a="${esc(a)}">${esc(t)}</button>`;
 async function casaApi(b){try{return await (await fetch(b?'api/casa':'api/mappa',b?{method:'POST',body:JSON.stringify(b)}:undefined)).json()}catch(e){return {error:'Errore: '+e}}}
-$('cb').onclick=async()=>{const h=$('hm');if(!h.classList.contains('hide')){h.classList.add('hide');return}h.classList.remove('hide');h.textContent='Leggo la casa...';mostraCasa(await casaApi())};
+async function salva(patch,prima){if(prima)STORIA.push(prima);const r=await casaApi({patch});if(!r.error)J=r;disegna(r.error)}
+function domandeAperte(){return (J.domande||[]).filter(q=>!SALTATE.has(kq(q)))}
+function pulsantiStanze(id){return J.stanze.map(s=>bt(s,'st|'+id+'|'+s)).join('')+bt('Nessuna (esterno o tutta la casa)','st|'+id+'|nessuna')+`<span style="display:flex;gap:.4em;width:100%"><input id=ns ${CAMPO} placeholder="+ nuova stanza"><button type=button class="s cb2" data-a="nuova|${esc(id)}">Aggiungi</button></span>`}
+function scheda(v){const m=v.mia||{};return `<div style="padding:.4em 0"><div class=mu>Cos'è</div><div class=chips>${FUNZ_B.map(f=>bt(f[1],'fz|'+v.id+'|'+f[0],v.funz_eff==f[0]?'':'s')).join('')}${bt('Non usare','no|'+v.id)}</div>
+<div class=mu>Stanza</div><div class=chips>${pulsantiStanze(v.id).replace('>'+esc(v.stanza_eff)+'<',' style="background:var(--ac);color:#fff">'+esc(v.stanza_eff)+'<')}</div>
+<div class=mu>Come lo chiami tu (facoltativo)</div><span style="display:flex;gap:.4em"><input id=sn ${CAMPO} value="${esc(m.nome||'')}" placeholder="es. luce del bagno"><button type=button class="s cb2" data-a="sn|${esc(v.id)}">Salva</button></span></div>`}
+function disegna(err){const h=$('hm');if(err){h.innerHTML=esc(err);return}
+ const dom=domandeAperte(),usati=J.voci.filter(v=>!(v.mia||{}).ignora),nonusati=J.voci.filter(v=>(v.mia||{}).ignora);
+ let x='<b>La tua casa</b> <span class=mu>(resta sul tuo Home Assistant)</span>';
+ if(MODO=='domande'&&dom.length){const q=dom[0];x+=`<p class=mu>Domande rimaste: ${dom.length}</p><p><b>${esc(q.testo)}</b></p><div class=chips>`;
+  if(q.tipo=='funzione')x+=FUNZ_B.map(f=>bt(f[1],'fz|'+q.id+'|'+f[0])).join('')+bt('Non usare','no|'+q.id);
+  else if(q.tipo=='stanza')x+=pulsantiStanze(q.id);
+  else if(q.tipo=='doppione')x+=q.ids.map((id,i)=>bt('Uso '+q.nomi[i],'dp|'+q.ids.join(',')+'|'+id)).join('')+bt('Sono diverse, le uso tutte','dp|'+q.ids.join(',')+'|');
+  x+=`</div><div class=row>${bt('Salta','salta|'+kq(q))}${STORIA.length?bt('Indietro','indietro'):''}${bt('Fine','riep')}</div>`}
+ else if(MODO=='stanze'){const gr={};usati.forEach(v=>(gr[v.stanza_eff||'Senza stanza']=gr[v.stanza_eff||'Senza stanza']||[]).push(v));
+  x+='<div class=row>'+bt('Riepilogo','riep')+'</div>';
+  Object.keys(gr).sort().forEach(k=>{x+=`<div class=g>${esc(k)} (${gr[k].length})</div>`+gr[k].map(v=>`<div style="border-top:1px solid var(--bd);padding:.3em 0"><span class=cb2 data-a="apri|${esc(v.id)}" style="cursor:pointer"><b>${esc(v.nome)}</b> <span class=mu>· ${esc(v.funz_eff=='interruttore'?'da chiarire':(v.funz_eff||''))}${(v.mia||{}).nome?' · "'+esc(v.mia.nome)+'"':''} ✎</span></span>${APERTA==v.id?scheda(v):''}</div>`).join('')});
+  if(nonusati.length)x+='<div class=g>Non usati</div>'+nonusati.map(v=>`<div class=row><span>${esc(v.nome)}</span>${bt('Ripristina','rip|'+v.id)}</div>`).join('');
+  if(J.memoria.length)x+='<div class=g>Scelte che ricordo</div>'+J.memoria.map(m=>`<div class=row><span>${esc(m.testo)} → ${esc(m.scelta)}</span>${bt('Dimentica','dim|'+m.chiave)}</div>`).join('')}
+ else{MODO='riepilogo';x+=`<p>${usati.length} dispositivi pronti${dom.length?', <b>'+dom.length+' domande</b>':(SALTATE.size?'':', nessuna domanda')}.</p><div class=row>${dom.length?bt('Rispondi alle domande','dom',''):''}${SALTATE.size?bt('Rivedi le '+SALTATE.size+' saltate','rivedi'):''}${bt('Vedi per stanza','stz')}${bt('Chiudi','chiudi')}</div>`}
+ h.innerHTML=x;
+ h.querySelectorAll('.cb2').forEach(b=>b.onclick=()=>azione(b.dataset.a))}
+function mia(id){const v=J.voci.find(x=>x.id==id);return Object.assign({},(v&&v.mia)||{})}
+async function azione(a){const p=a.split('|'),k=p[0];
+ if(k=='riep'){MODO='riepilogo';return disegna()} if(k=='dom'){MODO='domande';return disegna()} if(k=='stz'){MODO='stanze';return disegna()}
+ if(k=='chiudi')return $('hm').classList.add('hide');
+ if(k=='rivedi'){SALTATE=new Set();MODO='domande';return disegna()}
+ if(k=='salta'){SALTATE.add(a.slice(6));return disegna()}
+ if(k=='apri'){APERTA=APERTA==p[1]?'':p[1];return disegna()}
+ if(k=='indietro'){const u=STORIA.pop();const r=await casaApi({sostituisci:u});if(!r.error)J=r;return disegna(r.error)}
+ if(k=='dim'){const r=await casaApi({dimentica:p[1]});if(!r.error)J=r;return disegna(r.error)}
+ if(k=='fz')return salva({[p[1]]:{funzione:p[2],ignora:''}},{[p[1]]:mia(p[1])});
+ if(k=='no')return salva({[p[1]]:{ignora:true}},{[p[1]]:mia(p[1])});
+ if(k=='rip')return salva({[p[1]]:{ignora:''}},{[p[1]]:mia(p[1])});
+ if(k=='st')return salva({[p[1]]:{stanza:p[2]}},{[p[1]]:mia(p[1])});
+ if(k=='sn')return salva({[p[1]]:{nome:$('sn').value.trim()}},{[p[1]]:mia(p[1])});
+ if(k=='nuova'){const n=$('ns').value.trim();if(!n)return;const r=await casaApi({stanza_nuova:n});if(!r.error)J=r;return salva({[p[1]]:{stanza:n}},{[p[1]]:mia(p[1])})}
+ if(k=='dp'){const ids=p[1].split(','),sc=p[2],patch={},prima={};ids.forEach(id=>{prima[id]=mia(id);patch[id]=sc?(id==sc?{ignora:'',diverso:''}:{ignora:true}):{diverso:true}});return salva(patch,prima)}}
+$('cb').onclick=async()=>{const h=$('hm');if(!h.classList.contains('hide')){h.classList.add('hide');return}h.classList.remove('hide');h.textContent='Leggo la casa...';const r=await casaApi();if(!r.error)J=r;MODO='riepilogo';SALTATE=new Set();STORIA=[];disegna(r.error)};
 $('p').addEventListener('keydown',e=>{if(e.key=='Enter'&&(e.ctrlKey||e.metaKey))gen()});
 reteInfo();setInterval(reteInfo,30000);
 </script></html>"""
@@ -223,6 +244,24 @@ def aree():
     return _AREE["d"]
 
 
+_NOMI_AREE = {"t": 0, "d": []}
+
+
+def nomi_aree():
+    """Tutte le aree di Home Assistant (anche vuote), cache 60 s."""
+    if time.time() - _NOMI_AREE["t"] < 60:
+        return _NOMI_AREE["d"]
+    try:
+        req = urllib.request.Request(HA + "/template", data=json.dumps({"template": "{{ areas() | map('area_name') | list | to_json }}"}).encode(), method="POST",
+                                     headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            _NOMI_AREE["d"] = [str(x) for x in json.loads(r.read().decode()) if x]
+    except Exception:
+        pass
+    _NOMI_AREE["t"] = time.time()
+    return _NOMI_AREE["d"]
+
+
 def llm_call(payload, timeout=900):
     h = {"Content-Type": "application/json"}
     if OPT.get("llm_key"):
@@ -236,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.4"
+VERSIONE = "0.4.5"
 _RETE = {"t": 0, "v": None}
 
 
@@ -547,18 +586,62 @@ def generate(prompt, scelte=None, persona="", salta=False, stati=None, risposte=
     return r
 
 
+def _chiave_stanza(r):
+    r = " ".join(str(r or "").lower().split())
+    return mappa._UNICA.get(r, r)
+
+
 def vista_casa():
+    """Dati per "La tua casa": dispositivi con le scelte dell'utente, elenco unico delle stanze, domande da fare."""
     voci = mappa.costruisci(_stati(None, grezzi=True))
     d = memoria.carica()
+    ent = d["entita"]
     nomi = {v["id"]: v["nome"] for v in voci}
-    out = mappa.riassunto(voci)
-    out["voci"] = [dict(v, mia=d["entita"].get(v["id"]) or {}) for v in voci if v["stato"] in ("ok", "dubbia") or v["id"] in d["entita"]]
     st_ = {}
-    for r in [str(c.get("stanza")) for c in d["entita"].values() if c.get("stanza")] + [r for v in voci for r in v["stanze"]]:
-        k = mappa._UNICA.get(r.lower(), r.lower())
-        st_.setdefault(k, r[:1].upper() + r[1:])   # le stanze scritte da te vincono, senza doppioni
+    for r in d["stanze"] + [c.get("stanza") for c in ent.values()] + nomi_aree() + [r for v in voci for r in v["stanze"]]:
+        if r and str(r).strip() and str(r).lower() != "nessuna":
+            r = str(r).strip()
+            st_.setdefault(_chiave_stanza(r), r[:1].upper() + r[1:])
+    out = mappa.riassunto(voci)
     out["stanze"] = sorted(st_.values())
+    out["voci"] = []
+    for v in voci:
+        c = ent.get(v["id"]) or {}
+        if (v["stato"] not in ("ok", "dubbia") and v["id"] not in ent) or v["id"].split(".")[0] in ("person", "sensor", "binary_sensor", "assist_satellite"):
+            continue
+        stz = c.get("stanza") or (v["stanze"][0] if v["stanze"] else "")
+        out["voci"].append(dict(v, mia=c, funz_eff=c.get("funzione") or v["funzione"],
+                                stanza_eff="" if stz == "nessuna" else st_.get(_chiave_stanza(stz), stz)))
+    out["domande"] = domande_casa(voci, ent)
     out["memoria"] = [{"chiave": k, "testo": k.split(":", 1)[-1], "scelta": ", ".join(nomi.get(e, e) for e in v)} for k, v in d["memoria"].items()]
+    return out
+
+
+def domande_casa(voci, ent):
+    out, gruppi = [], {}
+    for v in voci:
+        c = ent.get(v["id"]) or {}
+        if v["stato"] in ("tecnica", "non disponibile") or c.get("ignora"):
+            continue
+        dom = v["id"].split(".")[0]
+        f = c.get("funzione") or v["funzione"]
+        if f == "interruttore" and not c.get("funzione"):
+            out.append({"tipo": "funzione", "id": v["id"], "testo": "\"%s\": cos'è?" % v["nome"]})
+        elif not c.get("stanza") and dom not in ("person", "input_boolean", "vacuum", "assist_satellite") and f != "cancello/portone":
+            if not v["stanze"]:
+                out.append({"tipo": "stanza", "id": v["id"], "testo": "\"%s\": in che stanza è?" % v["nome"]})
+            elif len(v["stanze"]) > 1 or any("diverse" in x for x in v["dubbi"]):
+                out.append({"tipo": "stanza", "id": v["id"], "testo": "\"%s\": in che stanza è? (il nome dice una cosa, l'area un'altra: %s)" % (v["nome"], ", ".join(v["stanze"]))})
+        if c.get("diverso"):
+            continue
+        tipo = "TV" if f == "TV" else "soundbar" if "soundbar" in (v["id"] + v["nome"]).lower() else ""
+        if tipo:
+            stz = c.get("stanza") or (v["stanze"][0] if v["stanze"] else "")
+            gruppi.setdefault((tipo, _chiave_stanza(stz)), []).append(v)
+    for (tipo, stz), g in gruppi.items():
+        if len(g) > 1:
+            out.append({"tipo": "doppione", "ids": [x["id"] for x in g], "nomi": [x["nome"] for x in g],
+                        "testo": "In %s ci sono %d %s: quale usi?" % (stz or "casa", len(g), "TV" if tipo == "TV" else "soundbar")})
     return out
 
 
@@ -743,6 +826,12 @@ class H(BaseHTTPRequestHandler):
                     memoria.dimentica(data.get("dimentica") or None)
                 if "md" in data:
                     memoria.salva_md(data.get("md"))
+                if "stanza_nuova" in data:
+                    memoria.aggiungi_stanza(data.get("stanza_nuova"))
+                if "patch" in data:
+                    memoria.aggiorna(data.get("patch"))
+                if "sostituisci" in data:
+                    memoria.correggi(data.get("sostituisci"))
                 self._send(200, vista_casa())
             elif self.path.endswith("/api/modifica"):
                 self._send(200, modifica(data))
