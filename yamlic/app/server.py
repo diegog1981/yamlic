@@ -192,7 +192,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.30"
+VERSIONE = "0.3.31"
 _RETE = {"t": 0, "v": None}
 
 
@@ -230,6 +230,9 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
         dom = core.ambiguity(states, prompt, io)
         if dom:
             return {"domanda": dom}
+    coda = None if scelte else core.coda_condizionale(prompt, states)
+    if coda:
+        prompt, coda_az, coda_av = coda
     ents, known = core.select_entities(states, prompt, io, only=set(scelte) if scelte else None)
     t0 = time.time()
     via, res, y, anon, err = "locale", None, "", None, ""
@@ -306,6 +309,9 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
     if flag("ibrido", True):
         y, avi = core.ibrido(y, states, prompt)
         avvisi = avvisi + avi
+    if coda:
+        y = core.aggiungi_azione(y, coda_az)
+        avvisi = avvisi + [coda_av]
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))

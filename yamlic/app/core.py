@@ -1163,6 +1163,63 @@ def scomponi(prompt):
     return out[:4] if len(out) > 1 else [p]
 
 
+
+_CODA = re.compile(r"[\s,]+e\s+se\s+(?P<sogg>.+?)\s+(?:\u00e8|e'|e)\s+(?P<st>accesa|acceso|spenta|spento|aperta|aperto|chiusa|chiuso)\s*,?\s+(?P<v>spegn|accend|apr|chiud)(?:ila|ilo|ili|ile|i)\b[\s.!]*$", re.I)
+_STATO_SERV = {"media_player": ("turn_on", "turn_off"), "light": ("turn_on", "turn_off"), "switch": ("turn_on", "turn_off"), "fan": ("turn_on", "turn_off"), "cover": ("open_cover", "close_cover")}
+
+
+def coda_condizionale(prompt, states):
+    """'..., e se la TV del soggiorno e accesa spegnila': separa la coda dalla frase e la costruisce con regole.
+    Ritorna (prompt_ridotto, azione_choose, avviso) oppure None."""
+    m = _CODA.search(prompt)
+    if not m:
+        return None
+    parole = [w for w in re.findall(r"[a-z\u00e0-\u00ff]{2,}", m.group("sogg").lower()) if w not in STOP and w not in ("del", "della", "dello", "dei", "delle", "il", "lo", "la", "le", "un", "una")]
+    if not parole:
+        return None
+    best, bs = None, 0
+    for s_ in states:
+        eid = s_["entity_id"]
+        d = eid.split(".")[0]
+        if d not in _STATO_SERV:
+            continue
+        t = _t(s_)
+        n = sum(w in t for w in parole)
+        if "tv" in parole and d == "media_player":
+            n += 2
+        if "solo audio" in t or "luminosita" in t:
+            n -= 3
+        if n > bs:
+            best, bs = eid, n
+    if not best or bs < max(1, len(parole) - 1):
+        return None
+    d = best.split(".")[0]
+    st = m.group("st").lower()
+    v = m.group("v").lower()
+    on, off = _STATO_SERV[d]
+    apre = v.startswith(("accend", "apr"))
+    srv = d + "." + (on if apre else off)
+    if d == "cover":
+        stato = "open" if st in ("aperta", "aperto") else "closed"
+    else:
+        stato = "on" if st in ("accesa", "acceso", "aperta", "aperto") else "off"
+    azione = {"if": [{"condition": "state", "entity_id": best, "state": stato}], "then": [{"action": srv, "target": {"entity_id": best}}]}
+    return prompt[:m.start()].rstrip(" ,") + ".", azione, "'se %s' costruito con regole: se %s e %s, %s" % (m.group("sogg").strip(), best, stato, srv)
+
+
+def aggiungi_azione(y, azione):
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return y
+    if not isinstance(cfg, dict):
+        return y
+    k = "actions" if "actions" in cfg or "triggers" in cfg else "action"
+    if not isinstance(cfg.get(k), list):
+        cfg[k] = []
+    cfg[k].append(azione)
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
+
 def unisci(risultati):
     """risultati: lista di dict di generate(). Ritorna il YAML unito (automazioni separate da ---) e i problemi con prefisso [n]."""
     ys, pr = [], []
@@ -1476,9 +1533,16 @@ def ripara(y, states, prompt, notify_ok=()):
                     avv.append("l'azione usava la TV ma chiedi una luce: messo %s" % e)
     # "le luci del salotto" (plurale): tutte le luci della stanza, non una sola
     stanze_citate = sum(1 for g in ROOMS + [{"ingresso"}, {"corridoio"}] if any(re.search(r"\b%s\b" % w, lp) for w in g))
-    if re.search(r"\b(le|tutte le) luci (del|della|dello|dell'|in)\s*\w+", lp) and not re.search(r"tranne|eccetto|tutte le luci\b(?! (del|della|dell))", lp) \
-            and stanze_citate == 1 and not re.search(r"\be (i|il|la|le|lo|gli|l')\s*\w+", lp):
+    mt = re.search(r"\b(?:tranne|eccetto)\s+(.+?)(?:\s+e\s+se\b|[,.]|$)", lp)
+    if re.search(r"\b(le|tutte le) luci (del|della|dello|dell'|in)\s*\w+", lp) and not re.search(r"tutte le luci\b(?! (del|della|dell))", lp) \
+            and stanze_citate == 1 and (mt or not re.search(r"tranne|eccetto", lp)) and not re.search(r"\be (i|il|la|le|lo|gli|l')\s*\w+", lp.replace(mt.group(0), "") if mt else lp):
         luci = _luci_stanza(states, lp)
+        if mt:
+            esc = [w for w in re.findall(r"[a-z\u00e0-\u00ff]{4,}", mt.group(1)) if w not in GENERIC and w not in STOP and w not in STOPIT]
+            fuori = [e for e in luci if any(w in _t(next(s_ for s_ in states if s_["entity_id"] == e)) for w in esc)] if esc else []
+            if esc and not fuori:
+                avv.append("\"tranne %s\": non ho trovato nessuna luce con quel nome, nessuna esclusa" % " ".join(esc))
+            luci = [e for e in luci if e not in fuori]
         if len(luci) > 1:
             for a in cfg.get("actions") or []:
                 if not isinstance(a, dict) or not re.match(r"(light|switch)\.turn_(on|off)$", str(a.get("action", ""))):
