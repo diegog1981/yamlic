@@ -132,6 +132,7 @@ def plausibile(azioni, frase):
 # ---------- entita ----------
 class Casa:
     def __init__(self, states):
+        aggiungi_stanze(states)
         self.states = [s for s in states]
         self.by = {s["entity_id"]: s for s in states}
         self.risposte, self.domande, self.pezzo = {}, False, ""
@@ -207,9 +208,10 @@ class Casa:
         nm = _n(self.nome(e))
         return any(re.search(r"\b%s\b" % r, nm) for r in STANZE if r not in gruppi and r not in ("isola", "tavolo", "esterno"))
 
-    def tende(self, stanze=()):
-        return [s["entity_id"] for s in self.states if core._dom(s["entity_id"]) == "cover" and self.vivo(s)
-                and self.classe(s) not in ("garage", "gate", "door") and (not stanze or self._in_stanza(s, stanze))]
+    def tende(self, stanze=(), largo=False):
+        out = [s["entity_id"] for s in self.states if core._dom(s["entity_id"]) == "cover" and self.vivo(s)
+               and self.classe(s) not in ("garage", "gate", "door") and (not stanze or self._in_stanza(s, stanze, largo))]
+        return self.tende(stanze, True) if stanze and not out and not largo else out
 
     def tv(self, stanze=()):
         best = []
@@ -291,6 +293,20 @@ def apparecchi(frase, casa, avv):
 
 
 _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?:mio\s+|mia\s+)?(%s)\b)" % "|".join(STANZE)
+_BASE = STANZE
+
+
+def aggiungi_stanze(states):
+    """Stanze nuove della casa (aree di HA o scritte dall'utente, es. "sala da pranzo") capite anche nelle frasi."""
+    global STANZE, _STANZA
+    nuove = []
+    for s in states:
+        ar = " ".join(_n((s.get("attributes") or {}).get("_area") or "").split())
+        if len(ar) >= 4 and re.fullmatch(r"[a-z' ]+", ar) and ar not in STANZE and ar not in nuove and not any(re.search(r"\b%s\b" % r, ar) for r in _BASE):
+            nuove.append(ar)
+    if nuove:
+        STANZE = tuple(sorted(nuove, key=len, reverse=True)) + STANZE
+        _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?:mio\s+|mia\s+)?(%s)\b)" % "|".join(STANZE)
 
 
 def bersagli(frase, casa, avv, verbo=None):

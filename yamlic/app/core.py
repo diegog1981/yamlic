@@ -189,7 +189,8 @@ def select_entities(states, prompt, io_person="", limit=15, only=None):
         if keep:
             scored = keep
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    top = [(e, n) for _, e, n, _ in scored]
+    per_id = {s["entity_id"]: s for s in states}
+    top = [(e, descrivi_per_ai(per_id.get(e), n)) for _, e, n, _ in scored]
     zone = [x for x in top if x[0] == "zone.home"]
     rest = [x for x in top if x[0] != "zone.home"]
     persons.sort(key=lambda x: x[0] != io_person)
@@ -230,6 +231,17 @@ def prune_unknown(y, known):
 # ---------- domande di chiarimento (regole fisse, non il modello) ----------
 ALL_LIGHTS = re.compile(r"\btutt\w*\s+(?:le\s+|i\s+|gli\s+)?(?:luc\w*|lamp\w*|farett\w*|illuminazion\w*)")
 STOP = set("quando spegni accendi accendere spegnere chiudi apri alle della delle dello degli sempre ogni dopo prima".split())
+
+def descrivi_per_ai(s, nome):
+    """Riassunto della casa per l'AI: "Ingresso bagno / luce del bagno [bagno]". Esce dalla casa solo anonimizzato."""
+    a = (s or {}).get("attributes") or {}
+    out = nome or ""
+    if a.get("_soprannome") and a["_soprannome"].lower() not in out.lower():
+        out += " / " + a["_soprannome"]
+    if a.get("_area") and a["_area"].lower() not in out.lower():
+        out += " [%s]" % a["_area"]
+    return out
+
 
 def _t(s):
     """Testo su cui si cercano stanze e parole: id + nome + area di Home Assistant."""
