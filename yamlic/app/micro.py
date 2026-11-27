@@ -488,6 +488,14 @@ def escludi(ids, testo, casa, avv):
     return [e for e in ids if e not in fuori] or None
 
 
+def _n_binari(casa, classi, dove):
+    c = [s for s in casa.states if core._dom(s["entity_id"]) == "binary_sensor" and casa.vivo(s) and casa.classe(s) in classi]
+    parole = [w for w in _resto(dove or "") if w != "casa"]
+    if parole:
+        c = [s for s in c if all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
+    return len(c)
+
+
 def binario(casa, classi, dove):
     """Sensore binario unico della classe giusta nella stanza detta."""
     c = [s for s in casa.states if core._dom(s["entity_id"]) == "binary_sensor" and casa.vivo(s) and casa.classe(s) in classi]
@@ -626,6 +634,8 @@ def evento(testo, casa, io, avv):
     if m or m2:
         dove = (m or m2).group(1)
         e = binario(casa, ("motion", "occupancy"), dove)
+        if not e and not _n_binari(casa, ("motion", "occupancy"), dove):
+            _manca(casa, t, "un sensore di movimento%s" % ((" in " + dove) if dove else ""), "per esempio usa la presenza di una persona, oppure un orario")
         return fine({"trigger": "state", "entity_id": e, "to": "on" if m else "off"}) if e else None
     if re.fullmatch(r"(?:il )?(?:robot|aspirapolvere)(?: aspirapolvere)? (?:si (?:e' |e )?)?(?:e' |e )?(?:fermato|ferma|bloccato|blocca)", t):
         rb = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "vacuum" and casa.vivo(s)]
@@ -688,6 +698,7 @@ def evento(testo, casa, io, avv):
         if len(cand) != 1:
             if not cand:
                 avv.append("nessun sensore di %s in \"%s\"" % (m.group(1), m.group(2)))
+                _manca(casa, t, "un sensore di %s in %s" % (m.group(1), m.group(2)), "per esempio un orario, oppure un altro sensore")
             return None
         v = float(m.group(4).replace(",", ".")); v = int(v) if v == int(v) else v
         return fine({"trigger": "numeric_state", "entity_id": cand[0], ("below" if "sotto" in m.group(3) or "meno" in m.group(3) else "above"): v})
