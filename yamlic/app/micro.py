@@ -538,6 +538,56 @@ def nomi_persone(t, casa):
     return t
 
 
+def _manca(casa, testo, cosa, alternativa):
+    """Evento che la casa non puo dare: messaggio onesto (con alternativa) invece di indovinare o proporre dispositivi estranei."""
+    if not getattr(casa, "domande", False):
+        return None
+    raise Domanda("riscrivi:" + testo, "In casa non trovo %s: scrivi un altro evento (%s)." % (cosa, alternativa), riscrivi=True)
+
+
+_LEMMI_EVENTO = (
+    # presenza
+    (r"(?:la )?casa si svuota|si svuota la casa|esce l'ultim[oa](?: persona)?|non resta (?:piu )?nessuno(?: in casa)?|rimane vuota la casa|resta vuota la casa", "casa vuota"),
+    (r"la casa si riempie|(?:rientra|torna|arriva|entra) (?:la prima persona|il primo|qualcuno)(?: a casa| in casa)?|(?:rientra|torna|arriva) la prima persona", "qualcuno torna"),
+    # elettrodomestici: il verbo dopo il nome
+    (r"(?:e' )?finit[oa] (?:il (?:ciclo|lavaggio|programma) (?:della |dell'|del )?)?(?:la )?(lavatrice|lavastoviglie|asciugatrice)", r"la \1 finisce"),
+    (r"(?:finisce|termina|e' terminat[oa]) (?:il (?:ciclo|lavaggio|programma) (?:della |dell'|del )?)?(?:la )?(lavatrice|lavastoviglie|asciugatrice)", r"la \1 finisce"),
+    (r"(?:la )?(lavatrice|lavastoviglie|asciugatrice) (?:e' finita|ha terminato il ciclo|ha finito il ciclo|ha finito il lavaggio)", r"la \1 finisce"),
+    (r"(?:il )?(?:ciclo|lavaggio|programma) (?:della |dell'|del )(lavatrice|lavastoviglie|asciugatrice) (?:finisce|termina|e' finito)", r"la \1 finisce"),
+    (r"(?:e' )?(?:la )?fine (?:del )?(?:ciclo|lavaggio|programma) (?:della |dell'|del )(lavatrice|lavastoviglie|asciugatrice)", r"la \1 finisce"),
+)
+_SOLE_TRAMONTO = r"(?:il )?sole (?:tramonta|va giu|cala|se ne va|e' tramontato|scende|va a letto)|tramonta(?: il sole)?|e' tramontato il sole|cala il sole|(?:si fa|fa) buio|cala la sera|(?:il )?sole (?:e' )?(?:sotto|scompare)"
+_SOLE_ALBA = r"(?:il )?sole (?:sorge|spunta|nasce|e' sorto|si alza|arriva)|albeggia|sorge il sole|spunta il sole|(?:si fa|fa) giorno|spunta l'alba|e' l'alba|fa chiaro|(?:e' )?(?:l')?alba"
+_PIOGGIA_FINE = r"(?:smette|finisce|la smette|ha smesso|e' finito|e' finita) (?:di )?(?:piovere|la pioggia|pioggia)|non piove piu|spiove|(?:la )?pioggia (?:smette|finisce|cessa)|cessa (?:di piovere|la pioggia)|e' finito (?:il )?temporale|(?:il )?temporale (?:finisce|passa|e' finito)"
+_PIOGGIA_INIZIO = r"(?:inizia|comincia|si mette|ricomincia) a piovere|piove|pioviggina|(?:arriva|inizia|comincia) (?:la )?pioggia|(?:c'e'|c'e) (?:la )?pioggia|(?:scoppia|arriva|c'e'|c'e) (?:un |il )?temporale|(?:la )?pioggia (?:inizia|comincia|arriva)"
+
+
+def evento_lemmi(t, casa, avv):
+    """Parole chiave -> famiglia dell'evento anche con verbi mai visti (sole, meteo). Ritorna (trigger, []) o None."""
+    for rx, canon in _LEMMI_EVENTO:
+        t = re.sub(r"\b(?:%s)\b" % rx, canon, t) if re.fullmatch(rx, t) else t
+    if re.fullmatch(_SOLE_TRAMONTO, t):
+        return {"trigger": "sun", "event": "sunset"}, [], t
+    if re.fullmatch(_SOLE_ALBA, t):
+        return {"trigger": "sun", "event": "sunrise"}, [], t
+    fine = re.fullmatch(_PIOGGIA_FINE, t)
+    if fine or re.fullmatch(_PIOGGIA_INIZIO, t):
+        w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
+        if not w:
+            _manca(casa, t, "un servizio meteo", "per esempio un orario, oppure aggiungi l'integrazione Meteo (Met.no) in Home Assistant")
+            return None
+        if len(w) > 1:
+            casa_w = [e for e in w if re.search(r"home|casa", e)]
+            w = casa_w if len(casa_w) == 1 else w
+        if len(w) != 1:
+            return None
+        if fine:
+            avv.append("smette di piovere = il meteo passa da pioggia ad altro; dipende da quanto spesso il tuo servizio meteo si aggiorna")
+            return {"trigger": "state", "entity_id": w[0], "from": ["rainy", "pouring"], "to": ["cloudy", "partlycloudy", "sunny", "clear-night", "fog", "windy", "windy-variant", "exceptional"]}, [], t
+        return {"trigger": "state", "entity_id": w[0], "to": ["rainy", "pouring"]}, [], t
+    return t
+
+
 def evento(testo, casa, io, avv):
     """Testo dopo 'quando/appena': ritorna (trigger, condizioni) oppure None."""
     t = nomi_persone(testo.strip(), casa)
@@ -546,6 +596,13 @@ def evento(testo, casa, io, avv):
     if m:
         per = _durata(m.group(1), m.group(2)); t = _togli(t, m)
     t = " ".join(t.split())
+    lem = evento_lemmi(t, casa, avv)
+    if isinstance(lem, tuple):
+        tr_, _c, _t = lem
+        if per:
+            tr_["for"] = per
+        return tr_, []
+    t = lem or t
 
     def fine(tr):
         if per:
@@ -828,9 +885,37 @@ def messaggio(originale, chiave):
     return m.group(1) if m else None
 
 
+_NUMW = {"due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8, "nove": 9, "dieci": 10, "undici": 11, "dodici": 12,
+         "tredici": 13, "quattordici": 14, "quindici": 15, "sedici": 16, "diciassette": 17, "diciotto": 18, "diciannove": 19, "venti": 20,
+         "ventuno": 21, "ventidue": 22, "ventitre": 23}
+_PARTE = r"(?:(?:del|della|di|in|nel|nella)\s+)?(mattina|mattino|pomeriggio|sera|notte|nottata)"
+
+
+def ore_lettere(p):
+    """'alle sette', 'alle dieci di sera', 'alle 7 del mattino', 'alle otto e mezza' -> 'alle 7', 'alle 22', 'alle 7', 'alle 8:30'."""
+    num = r"(\d{1,2}|%s)" % "|".join(sorted(_NUMW, key=len, reverse=True))
+
+    def conv(m):
+        pre, h, mn, parte = m.group(1), m.group(2), m.group(3), m.group(4)
+        h = int(h) if h.isdigit() else _NUMW[h]
+        if mn:
+            mn = {"mezza": 30, "mezzo": 30, "un quarto": 15, "tre quarti": 45}.get(mn) if not mn.isdigit() else int(mn)
+        if parte in ("pomeriggio", "sera") and h < 12:
+            h += 12
+        elif parte in ("notte", "nottata"):
+            h = (h + 12) if 6 <= h <= 11 else (0 if h == 12 else h)
+        if h > 23 or (mn is not None and mn > 59):
+            return m.group(0)
+        return "%s %d%s" % (pre, h, (":%02d" % mn) if mn else "")
+    return re.sub(r"\b(alle|dalle|dopo le|prima delle|tra le|fra le|e le|entro le)\s+(?:ore\s+)?%s(?:\s+e\s+(mezza|mezzo|un quarto|tre quarti|\d{2}))?(?:\s+%s)?\b" % (num, _PARTE), conv, p)
+
+
 def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
-    for da, a_ in ((r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
+    p = ore_lettere(p)
+    for da, a_ in ((r"\bfammi sapere\b", "avvisami"), (r"\bfammi (accendere|spegnere|aprire|chiudere)\b", lambda m: {"accendere": "accendi", "spegnere": "spegni", "aprire": "apri", "chiudere": "chiudi"}[m.group(1)]),
+                   (r"^(.*?\b(?:avvisami|notificami|avvertimi)(?: (?:sul|al) (?:mio )?(?:telefono|cellulare))?)\s+(?:alla |per la |la )?fine (?:del |della |dello )?(?:ciclo |lavaggio |programma )?(?:della |del )?(lavatrice|lavastoviglie|asciugatrice)\b", r"quando la \2 finisce \1"),
+                   (r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
                    (r"\ball'una\b(?! e)", "alle 1:00"), (r"\bal calar del sole\b", "al tramonto"), (r"\bmentre\b", "solo se"), (r"\be (?:sono )?(?=dopo le \d)", " "), (r"\bcon scritto\b", "che"), (r"\bmezz'ora\b", "30 minuti"), (r"\ba mezzanotte e mezz[ao]\b", "alle 0:30"),
                    (r"\b(?:quando )?(?:fa|si fa) buio\b(?= (?:accend|spegn|apr|chiud|alz|abbass))", "al tramonto"),
                    (r"\b(?:tranne|escluso|eccetto) (?:il |nel )?(?:weekend|fine settimana)\b", "nei giorni feriali"),
