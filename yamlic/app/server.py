@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.22"
+VERSIONE = "0.4.23"
 _RETE = {"t": 0, "v": None}
 
 
@@ -668,7 +668,7 @@ def _generate(prompt, scelte, persona, salta, stati, risposte, salta_micro):
         r = _micro(prompt, stati, risposte if isinstance(risposte, dict) else None, persona, flag("domande", True))
         if r:
             d = r.get("domanda") or {}
-            if d and (d.get("riscrivi") or str(d.get("chiave", "")).startswith("riscrivi:")) and not d.get("opzioni") and not risposte and flag("ai_intera", True):
+            if d and (d.get("riscrivi") or str(d.get("chiave", "")).startswith("riscrivi:")) and not any(isinstance(o_, dict) and isinstance(o_.get("valore"), dict) and "yaml_ai" in o_["valore"] for o_ in (d.get("opzioni") or [])) and not risposte and flag("ai_intera", True):
                 # le regole e l'AI sul pezzo non bastano: prima di chiedere all'utente, l'AI sull'intera frase con il controllo finale
                 try:
                     r2 = _genera_uno(prompt, scelte, persona, salta, stati)

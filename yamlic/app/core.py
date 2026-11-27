@@ -310,11 +310,6 @@ def fix_domains(y):
     out, changed = [], False
     for a in cfg["actions"]:
         svc = str(a.get("action", "")) if isinstance(a, dict) else ""
-        ents_v = _target_ents(a) if isinstance(a, dict) else []
-        if ents_v and all(isinstance(e, str) and e.startswith("valve.") for e in ents_v) and svc.split(".", 1)[-1] in {"turn_on", "turn_off", "open_cover", "close_cover", "open", "close"}:
-            nuovo = "open_valve" if svc.split(".", 1)[-1] in {"turn_on", "open_cover", "open"} else "close_valve"
-            a = dict(a); a["action"] = "valve." + nuovo
-            changed = True
         if svc.startswith("light.") and svc.split(".", 1)[1] in {"turn_on", "turn_off", "toggle"}:
             ents = _target_ents(a)
             sw = [e for e in ents if isinstance(e, str) and e.startswith("switch.")]
@@ -1501,6 +1496,12 @@ def ripara(y, states, prompt, notify_ok=()):
         if "." not in s:
             return a
         dom, srv = s.split(".", 1)
+        if dom == "valve" and srv in {"turn_on", "turn_off", "open", "close", "open_cover", "close_cover"}:
+            chiude = re.search(r"\bchiud\w*|\bserra\w*|\bchiusa\b", lp)
+            apre = re.search(r"\bapr\w*|\baperta\b", lp)
+            if bool(chiude) != bool(apre):   # direzione chiara dalla frase: non indovino altrimenti
+                a["action"] = "valve." + ("close_valve" if chiude else "open_valve"); mod[0] = True
+                return a
         # notify con alias anonimo o servizio che non esiste in casa
         if dom == "notify" and noti and s not in noti:
             nuovo = mobili[0] if len(mobili) == 1 and re.search(r"telefon|cellular|smartphone|avvisami|notific", lp) else ("notify.notify" if "notify.notify" in noti else (mobili or noti)[0])
