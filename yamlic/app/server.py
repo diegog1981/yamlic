@@ -190,7 +190,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.28"
+VERSIONE = "0.3.29"
 _RETE = {"t": 0, "v": None}
 
 
@@ -265,11 +265,19 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
                 """Risposta valida ma poco fiduciosa: le regole hanno dovuto intervenire o il trigger e solo manuale."""
                 try:
                     yy = core.clean(anon.restore(core.extract_yaml(text_of(r))), known)[0]
-                    return core.trigger_da_testo(yy, states, prompt) != yy or bool(core.regole_028(yy, prompt)[1]) or bool(core.ripara(yy, states, prompt)[1])
+                    return core.trigger_da_testo(yy, states, prompt) != yy or bool(core.regole_028(yy, prompt)[1]) or bool(core.ripara(yy, states, prompt)[1]) or bool(core.ibrido(yy, states, prompt)[1])
                 except Exception:
                     return True
-            res, node = asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE,
-                                             adaptive=flag("voto_adattivo", True), escalate=dubbio, firma=lambda r: core.firma(core.extract_yaml(text_of(r)))))
+            def chiedi():
+                return asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE,
+                                            adaptive=flag("voto_adattivo", True), escalate=dubbio, firma=lambda r: core.firma(core.extract_yaml(text_of(r)))))
+            try:
+                res, node = chiedi()
+            except Exception as ex1:   # linea instabile: un secondo tentativo dopo 2 secondi
+                if not re.search(r"connect|timeout|reset|closed|ssl", str(ex1), re.I):
+                    raise
+                time.sleep(2)
+                res, node = chiedi()
             via = "rete:" + node[:6]
             y = anon.restore(core.extract_yaml(text_of(res)))
         except Exception as ex:
@@ -291,6 +299,9 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
     if flag("ripara", True):
         y, avr = core.ripara(y, states, prompt, [] if stati else servizi_notify())
         avvisi = avvisi + avr
+    if flag("ibrido", True):
+        y, avi = core.ibrido(y, states, prompt)
+        avvisi = avvisi + avi
     problems = core.validate(y, known, prompt, remote=via != "locale")
     if tolte:
         problems.append("entita non trovate in casa, tolte dall'elenco: " + ", ".join(tolte))

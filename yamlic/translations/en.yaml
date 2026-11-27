@@ -50,6 +50,9 @@ configuration:
   ripara:
     name: Repair model errors
     description: Automatically fixes non-existent services, unresolved notifications, lights swapped with the TV, rain triggers, wrong room.
+  ibrido:
+    name: Final check with the compiler
+    description: "Turns the automation into a plan, fixes non-existent entities, thresholds on the wrong sensor and actions that repeat the trigger, then rewrites clean YAML."
   grammatica:
     name: Grammar (experimental)
     description: "Forces the model to use only the listed entities and services. Off by default: needs testing."

@@ -1499,3 +1499,163 @@ def ripara(y, states, prompt, notify_ok=()):
     if mod[0]:
         y = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n")
     return y, avv
+
+
+# ---------- 0.3.29: ibrido (YAML del modello -> piano -> controlli -> YAML compilato) ----------
+_PAROLA = re.compile(r"[a-z0-9à-ÿ]+")
+_VUOTE = {"the", "di", "del", "della", "dello", "dei", "delle", "la", "il", "lo", "le", "e", "a", "in", "on", "off", "sensor", "binary", "switch", "light", "cover", "fan", "lock"}
+_MISURA = {"temperatura": ("temp", "thermo", "termo"), "umidita": ("humid", "hygro", "umid", "moisture"), "luminosita": ("lux", "illum", "light_level"),
+           "potenza": ("power", "potenza", "watt"), "energia": ("energy", "energia")}
+
+
+def _tok(s):
+    return {w for w in _PAROLA.findall(str(s).lower().replace("_", " ")) if w not in _VUOTE and len(w) > 1}
+
+
+def _simile(eid, states, dominio=None, contesto="", escludi=()):
+    """Entita esistente piu simile a un id inventato (stesso dominio se possibile)."""
+    dom = dominio or _dom(eid)
+    base = _tok(eid.split(".", 1)[-1])
+    best, bs = None, 0.0
+    for s_ in states:
+        e = s_["entity_id"]
+        if _dom(e) != dom or e in escludi:
+            continue
+        t = _tok(_t(s_))
+        if not t:
+            continue
+        sc = len(base & t) * 2 + len(_tok(contesto) & t) * 0.5
+        if base and base <= t:
+            sc += 3
+        if sc > bs:
+            best, bs = e, sc
+    return best if bs >= 2 else None
+
+
+def _sensore_per(prompt, states, attuale=""):
+    lp = prompt.lower()
+    tipo = next((k for k, v in _MISURA.items() if re.search(k[:5] + r"|" + "|".join(v), lp)), None)
+    if not tipo and re.search(r"grad|zero|cald|fredd|°", lp):
+        tipo = "temperatura"
+    if not tipo:
+        return None
+    radici = _MISURA[tipo] + (tipo[:5],)
+    cands = [s_ for s_ in states if _dom(s_["entity_id"]) == "sensor" and any(r in _t(s_) for r in radici)]
+    if not cands:
+        return None
+    pt = _tok(prompt)
+    if re.search(r"\bfuori\b|esterno|outdoor|outside", lp):
+        pt |= {"outdoor", "outside", "esterno", "esterna", "fuori", "exterior"}
+    cands.sort(key=lambda s_: -len(pt & _tok(_t(s_))))
+    return cands[0]["entity_id"]
+
+
+def _per_nome(prompt, states, escludi=(), domini=None):
+    """Entita il cui nome compare nella frase (la piu lunga), esclusa quella del trigger."""
+    lp = " " + re.sub(r"[^a-z0-9à-ÿ ]", " ", prompt.lower()) + " "
+    best, bl = None, 0
+    for s_ in states:
+        e = s_["entity_id"]
+        if e in escludi or (domini and _dom(e) not in domini):
+            continue
+        n = re.sub(r"[^a-z0-9à-ÿ ]", " ", ((s_.get("attributes") or {}).get("friendly_name") or "").lower()).strip()
+        if len(n) > 3 and (" %s " % n) in lp and len(n) > bl:
+            best, bl = e, len(n)
+    return best
+
+
+_VERBO = [(r"\b(spegn|turn off|switch off|stop)", "turn_off"), (r"\b(accend|turn on|switch on|attiv|avvia|fai partire)", "turn_on"),
+          (r"\b(apri|open)", "open"), (r"\b(chiudi|close)", "close")]
+
+
+def ibrido(y, states, prompt):
+    """Converte lo YAML del modello in piano, corregge entita/trigger/azioni e ricompila. Ritorna (yaml, avvisi)."""
+    import piano as P
+    try:
+        p = P.da_yaml(y)
+    except Exception:
+        return y, []
+    if not p or not p.get("a"):
+        return y, []
+    ids = {s_["entity_id"] for s_ in states}
+    lp = prompt.lower()
+    avv = []
+
+    def ripara_id(e, dom=None, ctx=""):
+        if not isinstance(e, str) or e in ids or e.startswith(("zone.", "sun.")):
+            return e
+        oid = e.split(".", 1)[-1]
+        altro = next((x for x in ids if x.split(".", 1)[-1] == oid), None)   # stesso nome, dominio diverso
+        nuovo = _simile(e, states, dom, ctx) or altro or (_per_nome(prompt, states, domini={_dom(e)}) if re.fullmatch(r"e\d+", oid) else None)
+        if nuovo:
+            avv.append("%s non esiste: usato %s" % (e, nuovo))
+            return nuovo
+        return e
+    trig_ids = set()
+    for t in p.get("t") or []:
+        for k in ("stato", "soglia"):
+            if k in t:
+                v = t[k] if isinstance(t[k], list) else [t[k]]
+                v = [ripara_id(e, ctx=prompt) for e in v]
+                if k == "soglia" and not t.get("attr"):
+                    v2 = []
+                    for e in v:
+                        sbagliato_tipo = False
+                        if _dom(e) == "sensor":
+                            st_ = next((x for x in states if x["entity_id"] == e), None)
+                            tt = _t(st_) if st_ else e
+                            chiede = next((k for k, v in _MISURA.items() if re.search(k[:5] + r"|" + "|".join(v), lp)), None)
+                            ha = next((k for k, v in _MISURA.items() if any(r in tt for r in v + (k[:5],))), None)
+                            sbagliato_tipo = bool(chiede and ha and chiede != ha)
+                        if sbagliato_tipo or _dom(e) not in ("sensor", "input_number", "number", "zone") or (_dom(e) == "zone" and re.search(r"grad|zero|temperat|umid|cald|fredd", lp)):
+                            s = _sensore_per(prompt, states, e)
+                            if s:
+                                avv.append("la soglia era su %s: messa sul sensore %s" % (e, s)); e = s
+                        v2.append(e)
+                    v = v2
+                t[k] = v[0] if len(v) == 1 else v
+                trig_ids |= set(v)
+    for c in p.get("c") or []:
+        for k in ("stato", "soglia"):
+            if k in c and isinstance(c[k], str):
+                c[k] = ripara_id(c[k], ctx=prompt)
+
+    def az(lst):
+        out = []
+        for a in lst:
+            if "scegli" in a:
+                for r in a["scegli"]:
+                    r["fai"] = az(r.get("fai") or [])
+                if a.get("altrimenti"):
+                    a["altrimenti"] = az(a["altrimenti"])
+            if "fai" in a and a.get("su") and isinstance(a["su"], list):
+                srv = a["fai"].split(".", 1)
+                su = []
+                for e in a["su"]:
+                    e2 = ripara_id(e, dom=srv[0] if srv[0] not in ("homeassistant",) else None, ctx=prompt)
+                    if e2 != e and _dom(e2) != srv[0] and srv[0] in ("light", "switch", "fan", "cover"):
+                        a["fai"] = _dom(e2) + "." + srv[1]
+                    su.append(e2)
+                # azione sulla stessa entita del trigger (es. "quando la porta si sblocca, accendi la luce" -> sblocca la porta)
+                if any(e in trig_ids for e in su) and not re.search(r"\b(spegnila|spegnilo|chiudila|chiudilo|riaccend|di nuovo)\b", lp):
+                    nuovo = _per_nome(prompt, states, escludi=trig_ids, domini={"light", "switch", "fan", "cover", "media_player", "climate", "valve"})
+                    verbo = next((v for r, v in _VERBO if re.search(r, lp)), None)
+                    if nuovo and verbo:
+                        d = _dom(nuovo)
+                        servizio = {"open": "open_cover" if d == "cover" else "open_valve" if d == "valve" else "turn_on",
+                                    "close": "close_cover" if d == "cover" else "close_valve" if d == "valve" else "turn_off"}.get(verbo, verbo)
+                        avv.append("l'azione ripeteva il trigger (%s): messa %s.%s su %s" % (", ".join(su), d, servizio, nuovo))
+                        a["fai"], su = d + "." + servizio, [nuovo]
+                    elif _dom(su[0]) in ("lock", "alarm_control_panel"):
+                        avv.append("azione su %s tolta: ripeteva il trigger" % su[0])
+                        continue
+                a["su"] = su
+            out.append(a)
+        return out
+    p["a"] = az(p["a"])
+    if not avv:
+        return y, []
+    try:
+        return P.compila(p, ids), avv
+    except Exception as ex:
+        return y, ["controllo del piano non riuscito: %s" % str(ex)[:80]]

@@ -50,6 +50,9 @@ configuration:
   ripara:
     name: Ripara errori del modello
     description: Corregge da solo servizi inesistenti, notifiche non risolte, luci scambiate con la TV, trigger della pioggia, stanza sbagliata.
+  ibrido:
+    name: Controllo finale con il compilatore
+    description: "Trasforma l'automazione in un piano, corregge entita inesistenti, soglie sul sensore sbagliato e azioni che ripetono il trigger, poi riscrive lo YAML pulito."
   grammatica:
     name: Grammatica (sperimentale)
     description: "Obbliga il modello a usare solo le entità e i servizi dell'elenco. Spento di default: va provato."
