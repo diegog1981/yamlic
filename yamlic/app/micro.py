@@ -329,8 +329,15 @@ def aggiungi_stanze(states):
         _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?:mio\s+|mia\s+)?(%s)\b)" % "|".join(STANZE)
 
 
+def _luogo_dopo(p):
+    """'spegni in salotto le luci' -> 'spegni le luci in salotto'."""
+    p = " ".join(p.split())
+    return re.sub(r"\b((?:ri)?(?:accendi|spegni|apri|chiudi|alza|abbassa))\s+((?:in|nel|nella|nell')\s*[a-z]+)\s+((?:le|la|il|i|gli|l')\s*[a-z]+)\b", r"\1 \3 \2", p, count=1)
+
+
 def bersagli(frase, casa, avv, verbo=None):
     """Ritorna (lista di entita, frase residua)."""
+    frase = re.sub(r"^((?:in|nel|nella|nell')\s*[a-z]+)\s+((?:le|la|il|i|gli|l')\s*[a-z]+)\b", r"\2 \1", " ".join((frase or "").split()))   # "in salotto le luci" -> "le luci in salotto"
     def _parole(x):
         return sorted(w for w in re.findall(r"[a-z0-9]+", x) if w not in ("il", "lo", "la", "i", "gli", "le", "l", "di", "del", "dello", "della", "dell", "dei", "delle", "in", "nel", "nella"))
     detto = _parole(frase)
@@ -550,7 +557,7 @@ def _manca(casa, testo, cosa, alternativa):
     """Evento che la casa non puo dare: messaggio onesto (con alternativa) invece di indovinare o proporre dispositivi estranei."""
     if not getattr(casa, "domande", False):
         return None
-    raise Domanda("riscrivi:" + testo, "In casa non trovo %s: scrivi un altro evento (%s)." % (cosa, alternativa), riscrivi=True)
+    raise Domanda("riscrivi:" + testo, "In casa non trovo %s: scrivi un'altra %s (%s)." % (cosa, "condizione" if getattr(casa, "in_condizione", False) else "cosa che deve succedere", alternativa), riscrivi=True)
 
 
 _LEMMI_EVENTO = (
@@ -598,6 +605,7 @@ def evento_lemmi(t, casa, avv):
 
 def evento(testo, casa, io, avv):
     """Testo dopo 'quando/appena': ritorna (trigger, condizioni) oppure None."""
+    casa.in_condizione = False
     t = nomi_persone(testo.strip(), casa)
     per = None
     m = re.search(r"\b" + _PER, t)
@@ -721,6 +729,7 @@ def evento(testo, casa, io, avv):
 
 def condizione(testo, casa, avv):
     """'la tv del soggiorno e' accesa' / 'c'e' qualcuno in casa'"""
+    casa.in_condizione = True
     t = nomi_persone(" ".join(testo.split()), casa)
     if re.fullmatch(r"(?:fuori )?(?:sta )?(?:piove(?:ndo)?)(?: fuori)?", t):
         w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
@@ -729,6 +738,36 @@ def condizione(testo, casa, avv):
             return None
         avv.append("pioggia presa dal meteo (%s): sono previsioni online, non un sensore" % casa.nome(w[0]))
         return {"condition": "state", "entity_id": w[0], "state": ["rainy", "pouring"]}
+    if re.fullmatch(r"non (?:fuori )?(?:sta )?(?:piove(?:ndo)?)(?: fuori)?|(?:non piove|e' asciutto)", t):
+        w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
+        if len(w) == 1:
+            avv.append("pioggia presa dal meteo (%s): sono previsioni online, non un sensore" % casa.nome(w[0]))
+            return {"condition": "not", "conditions": [{"condition": "state", "entity_id": w[0], "state": ["rainy", "pouring"]}]}
+        if not w:
+            _manca(casa, t, "un servizio meteo", "per esempio un orario, oppure aggiungi l'integrazione Meteo (Met.no) in Home Assistant")
+        return None
+    mm = re.fullmatch(r"(?:(non) )?(?:c'e'? (?:piu )?movimento|(?:si )?rileva(?:to)?(?: del)? movimento|(?:il sensore )?(?:vede|sente) movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t) or \
+        re.fullmatch(r"(non) c'e'? (?:piu )?movimento(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
+    if mm:
+        e = binario(casa, ("motion", "occupancy"), mm.group(2))
+        if not e and not _n_binari(casa, ("motion", "occupancy"), mm.group(2)):
+            _manca(casa, t, "un sensore di movimento%s" % ((" in " + mm.group(2)) if mm.group(2) else ""), "per esempio usa la presenza di una persona, oppure un orario")
+        return {"condition": "state", "entity_id": e, "state": "off" if mm.group(1) else "on"} if e else None
+    mt = re.fullmatch(r"(?:la )?(temperatura|umidita|potenza) (?:del |della |dell'|in |nel |nella )?(.+?) (?:e'|sale|scende|va|resta|rimane|supera) ?(?:ancora )?(sopra|sotto|oltre|piu di|meno di|supera|al di sopra di|al di sotto di)? ?(?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
+    if mt:
+        classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power"}[mt.group(1)]
+        parole = _resto(mt.group(2))
+        cand = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "sensor" and casa.vivo(s) and casa.classe(s) == classe
+                and (classe == "power" or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
+                and parole and all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
+        if not cand:
+            _manca(casa, t, "un sensore di %s in %s" % (mt.group(1), mt.group(2)), "per esempio un orario, oppure un altro sensore")
+            return None
+        if len(cand) != 1:
+            return None
+        v = float(mt.group(4).replace(",", ".")); v = int(v) if v == int(v) else v
+        basso = bool(re.search(r"sotto|meno|scende|al di sotto", t))
+        return {"condition": "numeric_state", "entity_id": cand[0], ("below" if basso else "above"): v}
     if re.fullmatch(r"(?:non c'e' nessuno|non c'e nessuno|la casa e' vuota|(?:noi )?siamo (?:tutti )?(?:fuori(?: casa| di casa)?|via)|non siamo (?:a|in) casa)(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "below": 1}
     if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' )(?: in casa| a casa)?", t):
@@ -924,6 +963,10 @@ def ore_lettere(p):
 def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     p = ore_lettere(p)
+    p = re.sub(r"^(?:dai|ecco|allora|ok|senti|scusa|ciao|buongiorno|buonasera|per favore|per piacere|ti prego)\b[, ]*", "", p)
+    p = re.sub(r"\b(?:tipo|diciamo|praticamente|cioe'?|magari|per favore|per piacere|per cortesia|ti prego|grazie(?: mille)?|mi raccomando|eh|insomma|quindi|ovviamente|semplicemente)\b,?", " ", p)
+    p = " ".join(p.split())
+    p = _luogo_dopo(p)
     for da, a_ in ((r"\bfammi sapere\b", "avvisami"), (r"\bfammi (accendere|spegnere|aprire|chiudere)\b", lambda m: {"accendere": "accendi", "spegnere": "spegni", "aprire": "apri", "chiudere": "chiudi"}[m.group(1)]),
                    (r"^(.*?\b(?:avvisami|notificami|avvertimi)(?: (?:sul|al) (?:mio )?(?:telefono|cellulare))?)\s+(?:alla |per la |la )?fine (?:del |della |dello )?(?:ciclo |lavaggio |programma )?(?:della |del )?(lavatrice|lavastoviglie|asciugatrice)\b", r"quando la \2 finisce \1"),
                    (r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
@@ -1303,6 +1346,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             if not re.search(r"\b(?:resta|rimane)\b", seg):
                 durata_azione, seg = _durata(m.group(1), m.group(2)), _togli(seg, m)
         trig, cond, giorni, seg = tempi(seg)
+        seg = _luogo_dopo(seg)
         if giorni:
             giorni_tutti = giorni
         ev_cond = []
@@ -1362,9 +1406,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             prefisso = bool(_resto(resto_seg) or not _resto(prima))
             if prefisso:
                 sospese += cs; seg = (prima + " " + resto_seg).strip()
-                c = cs[0]
-                if len(cs) == 1 and (str(c.get("entity_id", "")).startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) or c["condition"] == "not"):
-                    ultimi = [(c.get("entity_id") or c["conditions"][0]["entity_id"])]
+                for c in reversed(cs):   # l'ultima condizione su un dispositivo e a cui si riferisce "spegnila / chiudile"
+                    ee_ = c.get("entity_id") or (c.get("conditions") or [{}])[0].get("entity_id") or ""
+                    ee_ = ee_ if isinstance(ee_, list) else [ee_]
+                    if ee_ and str(ee_[0]).startswith(("light.", "switch.", "cover.", "media_player.", "fan.")):
+                        ultimi = list(ee_)
+                        break
             else:   # "spegni X se Y": la condizione vale per questa azione
                 sospese += cs; seg = prima
             apri_blocco = apri_blocco or prefisso
