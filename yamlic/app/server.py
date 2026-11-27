@@ -275,7 +275,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.5"
+VERSIONE = "0.4.6"
 _RETE = {"t": 0, "v": None}
 
 
@@ -598,7 +598,9 @@ def vista_casa():
     ent = d["entita"]
     nomi = {v["id"]: v["nome"] for v in voci}
     st_ = {}
-    for r in d["stanze"] + [c.get("stanza") for c in ent.values()] + nomi_aree() + [r for v in voci for r in v["stanze"]]:
+    ufficiali = d["stanze"] + [c.get("stanza") for c in ent.values()] + nomi_aree()
+    dai_nomi = [r for v in voci for r in v["stanze"] if not any(re.search(r"\b%s\b" % re.escape(r), str(u).lower()) for u in ufficiali if u)]
+    for r in ufficiali + dai_nomi:   # le stanze di HA e le tue vincono; quelle ricavate dai nomi solo se mancano
         if r and str(r).strip() and str(r).lower() != "nessuna":
             r = str(r).strip()
             st_.setdefault(_chiave_stanza(r), r[:1].upper() + r[1:])
@@ -612,12 +614,12 @@ def vista_casa():
         stz = c.get("stanza") or (v["stanze"][0] if v["stanze"] else "")
         out["voci"].append(dict(v, mia=c, funz_eff=c.get("funzione") or v["funzione"],
                                 stanza_eff="" if stz == "nessuna" else st_.get(_chiave_stanza(stz), stz)))
-    out["domande"] = domande_casa(voci, ent)
+    out["domande"] = domande_casa(voci, ent, st_)
     out["memoria"] = [{"chiave": k, "testo": k.split(":", 1)[-1], "scelta": ", ".join(nomi.get(e, e) for e in v)} for k, v in d["memoria"].items()]
     return out
 
 
-def domande_casa(voci, ent):
+def domande_casa(voci, ent, etichette=None):
     out, gruppi = [], {}
     for v in voci:
         c = ent.get(v["id"]) or {}
@@ -641,7 +643,7 @@ def domande_casa(voci, ent):
     for (tipo, stz), g in gruppi.items():
         if len(g) > 1:
             out.append({"tipo": "doppione", "ids": [x["id"] for x in g], "nomi": [x["nome"] for x in g],
-                        "testo": "In %s ci sono %d %s: quale usi?" % (stz or "casa", len(g), "TV" if tipo == "TV" else "soundbar")})
+                        "testo": "In %s ci sono %d %s: quale usi?" % ((etichette or {}).get(stz, stz) or "casa", len(g), "TV" if tipo == "TV" else "soundbar")})
     return out
 
 
