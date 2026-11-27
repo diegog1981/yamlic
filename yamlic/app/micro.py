@@ -887,7 +887,12 @@ def ripeti_verbo(p):
         if m:
             coda = re.split(r"(\b(?:quando|appena|se)\b)", z[m.end():], maxsplit=1)
             if not re.search(r"\b(?:alle|all'|tramonto|alba|mezzanotte|mezzogiorno)\b", coda[0]):   # l'orario in fondo vale per tutto l'elenco
-                coda[0] = re.sub(r" e (?=(?:il |lo |la |i |gli |le |l'))", " e %s " % m.group(1), coda[0])
+                testa = z[:m.end()]
+
+                def _verbo(mm, testa=testa, coda0=coda[0]):   # il verbo piu vicino prima di "e la/le ..."
+                    vs = re.findall(r"\b((?:ri)?(?:accendi|spegni|apri|chiudi)|alza|abbassa)\s", testa + coda0[:mm.start()])
+                    return " e %s " % (vs[-1] if vs else m.group(1))
+                coda[0] = re.sub(r" e (?=(?:il |lo |la |i |gli |le |l'))", _verbo, coda[0])
             pezzi[i] = z[:m.end()] + "".join(coda)
     return "".join(pezzi)
 
