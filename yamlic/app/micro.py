@@ -103,8 +103,19 @@ def candidati(casa, frase, verbo):
         e = s["entity_id"]
         if core._dom(e) not in _DOM_VERBO.get(verbo, ()) or not casa.vivo(s) or (core._dom(e) == "switch" and core.NOT_LIGHT.search(core._t(s)) and not parole & set(re.findall(r"\w+", casa.testo(s)))):
             continue
-        out.append((-len(parole & set(re.findall(r"[a-z0-9]+", casa.testo(s)))), casa.nome(e).lower(), e))
-    return [x[2] for x in sorted(out)][:15]
+        comuni = len(parole & set(re.findall(r"[a-z0-9]+", casa.testo(s))))
+        # senza parole in comune propongo solo cose "normali": per accendi/spegni le luci vere
+        if not comuni and verbo in ("turn_on", "turn_off") and (not core.is_light_like(e, core._t(s)) or re.search(r"status|display|schermo", casa.testo(s))):
+            continue
+        out.append((-comuni, casa.nome(e).lower(), e))
+    return [x[2] for x in sorted(out)][:8]
+
+
+def plausibile(azioni, frase):
+    """Proposta dell'AI: "spegni la lampada" (uno solo) non puo toccare piu dispositivi."""
+    n = sum(len(_lista((a.get("target") or {}).get("entity_id"))) for a in azioni)
+    plurale = re.search(r"\b(?:le|i|gli|tutt\w+|e)\b", frase)
+    return bool(plurale) or n <= 1
 
 
 # ---------- entita ----------
@@ -900,10 +911,10 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                     fatte = chiedi(frase) if chiedi and not anafora and eccez is None else None
                     if casa.domande:   # non decido io: propongo
                         opz = []
-                        if fatte:
-                            opz.append({"valore": {"azioni": fatte}, "nome": "Proposta AI: " + descrivi(fatte, casa), "dettaglio": ""})
                         if eccez is None and not anafora and not _PESANTI.search(" ".join(_resto(resto or ""))):
                             opz += _opz(casa, candidati(casa, frase, verbo))
+                        if fatte and plausibile(fatte, frase):
+                            opz.append({"valore": {"azioni": fatte}, "nome": "Proposta AI: " + descrivi(fatte, casa), "dettaglio": ""})
                         if opz:
                             raise Domanda("pezzo:" + frase, "Non ho capito \"%s\". Cosa intendi?" % frase, opz, multi=True, riscrivi=True)
                         return None
