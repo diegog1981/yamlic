@@ -1497,8 +1497,8 @@ def ripara(y, states, prompt, notify_ok=()):
             return a
         dom, srv = s.split(".", 1)
         if dom == "valve" and srv in {"turn_on", "turn_off", "open", "close", "open_cover", "close_cover"}:
-            chiude = re.search(r"\bchiud\w*|\bserra\w*|\bchiusa\b", lp)
-            apre = re.search(r"\bapr\w*|\baperta\b", lp)
+            chiude = re.search(r"\bchiud\w*|\bserra\w*|\bchiusa\b|\bspegn\w*|\bdisattiv\w*", lp)
+            apre = re.search(r"\bapr\w*|\baperta\b|\baccend\w*|\battiv\w*", lp)
             if bool(chiude) != bool(apre):   # direzione chiara dalla frase: non indovino altrimenti
                 a["action"] = "valve." + ("close_valve" if chiude else "open_valve"); mod[0] = True
                 return a
