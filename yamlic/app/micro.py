@@ -12,12 +12,13 @@ FERIALI, WEEKEND = ["mon", "tue", "wed", "thu", "fri"], ["sat", "sun"]
 STANZE = ("soggiorno", "salotto", "salone", "living", "cucina", "bagno", "cameretta", "camera", "giardino", "esterno", "ingresso",
           "corridoio", "studio", "mansarda", "taverna", "lavanderia", "terrazzo", "balcone", "garage", "cantina", "ufficio", "veranda", "isola", "tavolo")
 VERBI = {"accend": "turn_on", "riaccend": "turn_on", "spegn": "turn_off", "apr": "open_cover", "riapr": "open_cover", "alz": "open_cover",
-         "chiud": "close_cover", "richiud": "close_cover", "abbass": "close_cover"}
-_V = r"(?:ri)?(?:accend|spegn|apr|chiud)\w*|alz\w+|abbass\w+"
-_NOTIFICA = r"(?:avvisami|avvertimi|notificami|(?:mandami|inviami|manda|invia)\s+(?:una\s+)?notifica(?:\s+(?:sul|al)\s+(?:mio\s+)?(?:telefono|cellulare))?)"
+         "chiud": "close_cover", "richiud": "close_cover", "abbass": "close_cover",
+         "avvia": "start", "riavvia": "start", "ferma": "stop", "blocca": "lock", "sblocca": "unlock"}
+_V = r"(?:ri)?(?:accend|spegn|apr|chiud)\w*|alz\w+|abbass\w+|(?:ri)?avvia\w*|ferma\w*|blocca\w*|sblocca\w*"
+_NOTIFICA = r"(?:avvisami|avvertimi|notificami|(?:mandami|inviami|manda|invia)\s+(?:una\s+|un\s+)?(?:notifica|messaggio(?:\s+con\s+scritto)?)(?:\s+(?:sul|al)\s+(?:mio\s+)?(?:telefono|cellulare))?)"
 _ANNUNCIO = r"(?:annuncia|annunciami|di'|dillo|fai dire)"
 # dove si puo tagliare: virgole/punti, "poi", e "e/ma" solo se dopo viene un verbo o un nuovo quando/se
-_INIZIO = r"(?:(?:metti|imposta|porta)\b|(?:%s)\b|%s\b|%s\b|quando\b|appena\b|se\b|alle\b|all'|al tramonto|a mezz|dopo\b|poi\b|\d+ minuti (?:prima|dopo))" % (_V, _NOTIFICA, _ANNUNCIO)
+_INIZIO = r"(?:(?:metti|imposta|porta|riporta|rimanda)\b|(?:%s)\b|%s\b|%s\b|quando\b|appena\b|se\b|alle\b|all'|al tramonto|a mezz|dopo\b|poi\b|\d+ minuti (?:prima|dopo))" % (_V, _NOTIFICA, _ANNUNCIO)
 _TAGLIO = re.compile(r"(?<!\d)[.;!?]+(?!\d)\s*|,\s*(?:(?:e|ma)\s+)?(?:poi\s+)?|\s+(?:e|ed|ma)\s+poi\s+|\s+poi\s+|\s+(?:e|ed|ma|mentre|invece)\s+(?=%s)" % _INIZIO)
 # parole che si possono ignorare senza perdere significato
 VUOTE = set("""il lo la i gli le l un uno una di del dello della dei degli delle d in nel nello nella nei nelle a al allo alla ai agli alle
@@ -27,6 +28,7 @@ allora quindi inoltre per_favore voglio vorrei con ma sera mattina""".split())
 
 def _n(s):
     s = (s or "").lower().replace("’", "'")
+    s = re.sub(r"(?<=\w)è", "e", s)
     for a, b in (("ì", "i"), ("à", "a"), ("ò", "o"), ("ù", "u"), ("é", "e")):
         s = s.replace(a, b)
     return s.replace("è", "e'").replace("e''", "e'")
@@ -70,6 +72,7 @@ class Casa:
     def __init__(self, states):
         self.states = [s for s in states]
         self.by = {s["entity_id"]: s for s in states}
+        self.contesto = []   # stanza citata nel "quando": vale per "accendi i faretti"
 
     def testo(self, s):
         return _n(core._t(s))
@@ -134,6 +137,14 @@ class Casa:
             best.append((p, e))
         return [max(best)[1]] if best else []
 
+    def unico(self, parola):
+        """La parola e nel nome di una sola entita comandabile e non e generica."""
+        if len(parola) < 6 or parola in STANZE or parola in core.GENERIC or re.fullmatch(_COSE + "|" + _APPARECCHI, parola):
+            return None
+        h = [s["entity_id"] for s in self.states if core._dom(s["entity_id"]) in ("light", "switch", "fan", "input_boolean") and self.vivo(s)
+             and parola in _n((s.get("attributes") or {}).get("friendly_name", "")).split() and not core.NOT_LIGHT.search(core._t(s).replace("stuf", "").replace("caffe", ""))]
+        return h[0] if len(h) == 1 else None
+
     def per_nome(self, frase, domini=("light", "switch", "fan", "input_boolean", "cover", "media_player", "vacuum")):
         """Entita il cui nome (almeno 2 parole, o 1 parola lunga) compare per intero nella frase."""
         hit = []
@@ -165,12 +176,49 @@ def simile(testo, casa):
 
 # ---------- gruppi di bersagli ("le luci del giardino e la tv del soggiorno") ----------
 _COSE = r"(luc[ei]|lampade?|lampadina|faretti|illuminazione|tende?|tapparell[ae]|serrand[ae]|tv|tele|televisione|televisore)"
+_APPARECCHI = r"(?:ventilatore|ventola|serratura|robot aspirapolvere|robot|aspirapolvere|termostato|climatizzatore|condizionatore|riscaldamento)"
+_DOM_APP = {"vent": "fan", "serr": "lock", "robo": "vacuum", "aspi": "vacuum", "term": "climate", "clim": "climate", "cond": "climate", "risc": "climate"}
+
+
+def apparecchi(frase, casa, avv):
+    """'il ventilatore in camera', 'la serratura': entita del tipo giusto, unica (nella stanza se detta)."""
+    ids = []
+    rx = re.compile(r"\b(%s)\b(?:\s+(?:della porta|del portone))?(?:\s+(?:d'ingresso|di ingresso))?(?:%s)?" % (_APPARECCHI, _STANZA))
+    while True:
+        m = rx.search(frase)
+        if not m:
+            return ids, frase
+        dom = _DOM_APP[m.group(1)[:4]]
+        cand = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == dom and casa.vivo(s)]
+        if m.group(2):
+            cand = [e for e in cand if casa._in_stanza(casa.by[e], [m.group(2)], True)]
+        if len(cand) != 1:
+            return None, frase
+        ids += cand
+        frase = _togli(frase, m)
+
+
 _STANZA = r"(?:\s+(?:del|dello|della|dell'|dei|delle|in|nel|nella|nell'|di)\s*(?:mio\s+|mia\s+)?(%s)\b)" % "|".join(STANZE)
 
 
 def bersagli(frase, casa, avv, verbo=None):
     """Ritorna (lista di entita, frase residua)."""
-    ids = []
+    ids, frase = apparecchi(frase, casa, avv)
+    if ids is None:
+        return None, frase
+    for w in re.findall(r"[a-z]+", frase):   # "il lampadario", "la piantana"
+        u = casa.unico(w)
+        if u and not re.search(r"\b%s\s+(?:del|della|dell'|in|nel)" % w, frase) and u not in ids:
+            ids.append(u); frase = re.sub(r"\b%s\b" % w, " ", frase, count=1)
+    # "stufetta del bagno" -> entita che si chiama "Stufetta bagno"
+    for s_ in casa.states:
+        e = s_["entity_id"]
+        nm_ = _n((s_.get("attributes") or {}).get("friendly_name", "")).split()
+        if core._dom(e) in ("light", "switch", "fan") and casa.vivo(s_) and len(nm_) >= 2 and not re.fullmatch(_COSE, nm_[0]):
+            rx_ = r"\b" + r"\s+(?:(?:del|della|dello|dell'|di|in|nel|nella)\s*)?".join(re.escape(x) for x in nm_ if x not in ("del", "della", "di")) + r"\b"
+            m_ = re.search(rx_, frase)
+            if m_ and e not in ids:
+                ids.append(e); frase = _togli(frase, m_)
     esatti, nm = casa.per_nome(frase)
     if esatti and len(nm.split()) >= 2 and not re.fullmatch(r"(?:tv|luc[ei]|tend[ae])\s+(?:%s)" % "|".join(STANZE), nm):
         ids += esatti[:1]
@@ -188,6 +236,18 @@ def bersagli(frase, casa, avv, verbo=None):
             trovati = casa.tende(st)
         else:
             trovati = casa.luci(st)
+            if cosa == "faretti":
+                solo = [e for e in trovati if "farett" in casa.testo(casa.by[e])]
+                trovati = solo or trovati
+            tutte = bool(re.search(r"\btutt\w*\s+(?:le\s+|i\s+)?$", frase[:m.start()]))
+            if not st and not tutte and casa.contesto:
+                vicine = [e for e in casa.luci(casa.contesto) if e in trovati or cosa != "faretti"]
+                if not vicine:
+                    return None, frase
+                trovati = vicine
+                avv.append("\"%s\" senza stanza: uso quelle di '%s' (citata nel quando)" % (cosa, " ".join(casa.contesto)))
+            elif not st and not tutte and cosa == "faretti" and len(trovati) > 1:
+                return None, frase
             singolare = cosa in ("luce", "lampada", "lampadina")
             if singolare and len(trovati) > 1:
                 veri = [e for e in trovati if e.startswith("light.")]
@@ -219,17 +279,52 @@ def bersagli(frase, casa, avv, verbo=None):
 
 
 def escludi(ids, testo, casa, avv):
-    """'tranne X': toglie le entita di X."""
-    parole = [w for w in re.findall(r"[a-z]{3,}", testo) if w not in VUOTE and w not in core.GENERIC and w not in ("quelle", "quella", "quello", "quelli", "dell", "nell")]
-    if not parole:
-        return None
-    def corr(e):
-        t = casa.testo(casa.by[e])
-        return all(any(re.search(r"\b%s\b" % g, t) for g in core.room_words(w)) for w in parole)
-    via = [e for e in ids if corr(e)]
-    if not via:
-        avv.append("\"tranne %s\": in casa non c'e nessuna entita con quel nome fra i bersagli, quindi non ho escluso nulla" % " ".join(parole))
-    return [e for e in ids if e not in via] or None
+    """'tranne X e Y': toglie le entita di X e di Y. Se un'eccezione non e chiara ritorna None (non si indovina)."""
+    fuori = set()
+    for pezzo in re.split(r"\s+(?:e|ed|o)\s+|,", testo.strip()):
+        parole = [w for w in re.findall(r"[a-z]+", pezzo) if w not in VUOTE and w not in core.GENERIC and w not in ("quelle", "quella", "quello", "quelli", "dell", "nell")]
+        if not parole:
+            return None
+
+        def corr(e):
+            t = casa.testo(casa.by[e])
+            return all(any(re.search(r"\b%s\b" % g, t) for g in core.room_words(w)) for w in parole)
+        via = [e for e in ids if corr(e)]
+        if parole in (["giardino"],):
+            via = [e for e in ids if re.search(r"\bgiardino\b", casa.testo(casa.by[e]))] or via
+        if len(parole) == 1:   # "bagno" non deve escludere "Bagno Camera" se esiste il bagno vero
+            esatte = [e for e in via if _n((casa.by[e].get("attributes") or {}).get("_area", "")) == parole[0]]
+            via = esatte or via
+        if not via:
+            if len(parole) == 1 and parole[0] in STANZE:   # stanza che fra i bersagli non c'e: non c'e nulla da escludere, ma lo dico
+                avv.append("\"tranne %s\": in casa non c'e nessuna entita con quel nome fra i bersagli, quindi non ho escluso nulla" % parole[0])
+                continue
+            return None
+        fuori |= set(via)
+    return [e for e in ids if e not in fuori] or None
+
+
+def binario(casa, classi, dove):
+    """Sensore binario unico della classe giusta nella stanza detta."""
+    c = [s for s in casa.states if core._dom(s["entity_id"]) == "binary_sensor" and casa.vivo(s) and casa.classe(s) in classi]
+    parole = [w for w in _resto(dove or "") if w != "casa"]
+    if parole:
+        c = [s for s in c if all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
+    return c[0]["entity_id"] if len(c) == 1 else None
+
+
+def porta_finestra(t, casa):
+    """'si apre la finestra della cucina', 'la porta d'ingresso resta aperta' -> (sensore, 'on'/'off')."""
+    cosa = r"(?:la |il |una )?(?P<c>porta|finestra|portafinestra)(?P<d>(?: (?:d'|di |del |della |dell'|in |nel )?\s*\w+)?)"
+    for pat in (r"(?:si (?P<v>apre|chiude)|viene (?P<w>aperta|chiusa)) " + cosa, cosa + r" (?:si (?P<v>apre|chiude)|(?:viene|resta|rimane|e'|e) (?P<w>aperta|chiusa))"):
+        m = re.fullmatch(pat, t)
+        if m:
+            classi = ("door", "opening") if m.group("c") == "porta" else ("window", "opening")
+            dove = re.sub(r"^(?:\s*(?:d'|di |del |della |dell'|in |nel ))", "", m.group("d").strip() + " ").strip()
+            e = binario(casa, classi, dove)
+            v = m.group("v") or m.group("w")
+            return (e, "on" if v.startswith("apr") or v.startswith("aper") else "off") if e else None
+    return None
 
 
 # ---------- quando / condizioni ----------
@@ -272,6 +367,30 @@ def evento(testo, casa, io, avv):
     if re.fullmatch(r"(?:inizia a piovere|piove|comincia a piovere)", t):
         w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
         return fine({"trigger": "state", "entity_id": w[0], "to": ["rainy", "pouring"]}) if w else None
+    m = re.fullmatch(r"(?:vedo (?:del )?movimento|(?:si )?rileva(?:to)?(?: del)? movimento|c'e'? movimento|(?:il sensore )?(?:vede|sente) movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
+    m2 = re.fullmatch(r"(?:non c'e'? (?:piu )?movimento|non (?:si )?rileva (?:piu )?movimento|non c'e (?:piu )?movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
+    if m or m2:
+        dove = (m or m2).group(1)
+        e = binario(casa, ("motion", "occupancy"), dove)
+        return fine({"trigger": "state", "entity_id": e, "to": "on" if m else "off"}) if e else None
+    porta = porta_finestra(t, casa)
+    if porta:
+        return fine({"trigger": "state", "entity_id": porta[0], "to": porta[1]})
+    persone = {_n(casa.nome(s["entity_id"])).split()[0]: s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "person"}
+    for nome, eid in persone.items():
+        if re.fullmatch(r"(?:%s (?:esce|va via)(?: di casa| da casa)?|(?:esce|va via) %s(?: di casa)?)" % (nome, nome), t):
+            return fine({"trigger": "state", "entity_id": eid, "to": "not_home"})
+        if re.fullmatch(r"(?:%s (?:rientra|torna|arriva)(?: a casa| in casa)?|(?:rientra|torna|arriva) %s(?: a casa| in casa)?)" % (nome, nome), t):
+            return fine({"trigger": "state", "entity_id": eid, "to": "home"})
+    m = re.fullmatch(r"(accendo|spengo|qualcuno accende|qualcuno spegne) (.+)", t)
+    if m:
+        eid = stato_entita(m.group(2), casa, avv)
+        if not eid:
+            return None
+        acc = "accen" in m.group(1)
+        if core._dom(eid) == "media_player":
+            return fine({"trigger": "state", "entity_id": eid, **({"from": ["off", "standby"]} if acc else {"to": ["off", "standby"]})})
+        return fine({"trigger": "state", "entity_id": eid, "to": "on" if acc else "off"})
     m = re.fullmatch(r"(?:apro|apre|si apre|viene aperto|qualcuno apre) (?:il |la )?(cancello|portone|garage)|(?:il |la )?(cancello|portone|garage) (?:si apre|viene aperto)", t)
     if m:
         cosa = m.group(1) or m.group(2)
@@ -293,7 +412,7 @@ def evento(testo, casa, io, avv):
         avv.append("fine ciclo %s = potenza sotto 5 W per 3 minuti (e prima era sopra): controlla soglia e durata sul tuo elettrodomestico" % m.group(1))
         tr = {"trigger": "numeric_state", "entity_id": pot[0], "below": 5, "for": per or {"minutes": 3}}
         return tr, []
-    m = re.fullmatch(r"(?:la )?(temperatura|umidita|potenza) (?:del |della |dell'|in |nel |nella )?(.+?) (supera|va sopra|sale sopra|passa|e' sopra|e' piu' di|scende sotto|va sotto|e' sotto|e' meno di) (?:i |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
+    m = re.fullmatch(r"(?:la |l')?(temperatura|umidita|potenza) (?:del |della |dell'|in |nel |nella )?(.+?) (supera|va sopra|sale sopra|passa|e' sopra|e' piu' di|scende sotto|va sotto|e' sotto|e' meno di) (?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
     if m:
         classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power"}[m.group(1)]
         parole = _resto(m.group(2))
@@ -334,6 +453,16 @@ def condizione(testo, casa, avv):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"}
+    for s_ in casa.states:
+        if core._dom(s_["entity_id"]) == "person":
+            nome = _n(casa.nome(s_["entity_id"])).split()[0]
+            m_ = re.fullmatch(r"%s (?P<no>non )?(?:e'|e) (?P<d>a casa|in casa|fuori|fuori casa|via)" % nome, t)
+            if m_:
+                dentro = m_.group("d").endswith("casa") and not m_.group("d").startswith("fuori")
+                return {"condition": "state", "entity_id": s_["entity_id"], "state": "home" if dentro != bool(m_.group("no")) else "not_home"}
+    pf = porta_finestra(t, casa)
+    if pf:
+        return {"condition": "state", "entity_id": pf[0], "state": pf[1]}
     m = re.fullmatch(r"(?P<s>.+?) (?:e'|sono|risulta|e) (?:ancora |gia )?(?P<st>acces[aoei]|spent[aoei]|apert[aoei]|chius[aoei])", t)
     if not m:
         return None
@@ -368,6 +497,9 @@ def tempi(seg):
         if m and not re.search(r"(?:minut\w*|ora|ore)\s+" + pat, seg):
             ev = next(g for g in m.groups() if g)
             cond.append({"condition": "sun", key: "sunset" if ev == "tramonto" else "sunrise"}); seg = _togli(seg, m)
+    m = re.search(r"\bdi notte\b", seg)
+    if m and not re.search(r"\balle\b", seg):
+        cond.append({"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}); seg = _togli(seg, m)
     seg = re.sub(r"\bogni (?:sera|mattina|giorno|notte)\b(?=.*\balle\b)", " ", seg)
     m = re.search(r"(?:(\d+|mezz'?\s*|un\s*')\s*(minut[oi]|ora|ore)\s+(prima|dopo)\s+(?:del |il |l')?|\b(?:al|all'|il)\s*)\b(tramonto|alba)\b", seg)
     if m:
@@ -394,6 +526,9 @@ def tempi(seg):
     m = re.search(r"\b(?:(?:nel|il|solo nel|ogni)\s+(?:weekend|fine settimana)|(?:il )?sabato e (?:la )?domenica)\b", seg)
     if m:
         giorni, seg = WEEKEND, _togli(seg, m)
+    mm = re.search(r"\b(?:il|ogni) (%s) e (?:il |la )?(%s)\b" % ("|".join(GIORNI_IT), "|".join(GIORNI_IT)), seg)
+    if mm and not giorni:
+        giorni, seg = [GIORNI_IT[mm.group(1)], GIORNI_IT[mm.group(2)]], _togli(seg, mm)
     m = re.search(r"\b(?:ogni|il|la|solo il|solo la)\s+(%s)\b" % "|".join(GIORNI_IT), seg)
     if m and not giorni:
         giorni, seg = [GIORNI_IT[m.group(1)]], _togli(seg, m)
@@ -407,6 +542,24 @@ def messaggio(originale, chiave):
         return t[0].upper() + t[1:]
     m = re.search(r"[\"«]([^\"»]+)[\"»]", originale)
     return m.group(1) if m else None
+
+
+def parlato(p):
+    """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
+    for da, a_ in ((r"\bun quarto d'ora\b", "15 minuti"), (r"\b(alle \d{1,2}) e un quarto\b", r"\1:15"), (r"\b(alle \d{1,2}) e tre quarti\b", r"\1:45"),
+                   (r"\bal calar del sole\b", "al tramonto"), (r"\be (?:sono )?(?=dopo le \d)", " "), (r"\bcon scritto\b", "che"), (r"\bmezz'ora\b", "30 minuti"), (r"\ba mezzanotte e mezz[ao]\b", "alle 0:30"),
+                   (r"\b(?:quando )?(?:fa|si fa) buio\b(?= (?:accend|spegn|apr|chiud|alz|abbass))", "al tramonto"),
+                   (r"\b(?:tranne|escluso|eccetto) (?:il |nel )?(?:weekend|fine settimana)\b", "nei giorni feriali"),
+                   (r"\bfa(?:i|llo|lla) ripartire\b", "riavvialo"), (r"\bfai partire\b", "avvia"),
+                   (r"\b(?:la mattina|di mattina|tutte le mattine)\b(?= alle)", " "),
+                   (r"\b(?:tutte le sere|la sera|tutti i giorni|ogni giorno)\b(?= alle (?:1[3-9]|2[0-3])\b)", " "),
+                   (r"\b(?:ogni giorno|tutti i giorni)\b", " "), (r"\b(?:pero|comunque)\b", " "),
+                   (r"\b(?:tutte le sere|tutti i giorni|ogni giorno)(?= *$)", " ")):
+        p = re.sub(da, a_, p)
+    p = re.sub(r"\b(alle \d{1,2}(?:[:.]\d\d)?) (?:tutte le sere|tutti i giorni|ogni giorno)\b", r"\1", p)
+    p = re.sub(r"\b(luce|luci)( (?:del|della|dell') ?\w+) e (?=(?:del|della|dell')\b)", r"\1\2 e le luci ", p)
+    p = " ".join(p.split())
+    return p
 
 
 def costruisci(prompt, states, notify=(), io="", chiedi=None):
@@ -429,6 +582,10 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             testo_msg = om[:len(grezzo)].rstrip(" .")
         testo_msg = testo_msg or (grezzo[:1].upper() + grezzo[1:])
         p = p[:m.start(1)] + " __msg__ " + p[fine:]
+    m = re.search(r"\b(luce|tapparella|tenda)\b(?=.*\bquell[ae] (?:del|della|dell'|in))", p)
+    if m:
+        p = re.sub(r"\bquella (?=del|della|dell'|in )", m.group(1) + " ", p)
+    p = parlato(p)
     segs = [s.strip(" ,") for s in _TAGLIO.split(p) if s and s.strip(" ,")]
     rami, cur = [], {"tr": [], "cond": [], "az": []}
     giorni_tutti, sospese, ultimi, chieste = None, [], [], 0
@@ -453,7 +610,8 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
         if m:
             attesa, seg = _durata(m.group(1), m.group(2)), _togli(seg, m)
         m = re.search(r"\bper\s+(\d+|un|una|mezz')\s*(second[oi]|minut[oi]|or[ae]|ora)\b", seg)
-        if m and re.search(r"\baccendi\w*", seg) and not re.search(r"\b(?:quando|se|appena)\b[^,]*\bper\b(?![^,]*accendi)", seg[:m.start()] if False else ""):
+        va = re.search(r"\baccendi\w*", seg)
+        if m and va and not (m.start() < va.start() and re.search(r"\b(?:quando|appena|se)\b", seg[:m.start()])) and not re.search(r"\b(?:quando|se|appena)\b[^,]*\bper\b(?![^,]*accendi)", seg[:m.start()] if False else ""):
             if not re.search(r"\b(?:resta|rimane)\b", seg):
                 durata_azione, seg = _durata(m.group(1), m.group(2)), _togli(seg, m)
         trig, cond, giorni, seg = tempi(seg)
@@ -466,11 +624,15 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             m = re.match(r"se\b\s*(.*)$", seg)
             if cond:
                 avv.append("\"resta acceso dopo le...\": scatta solo quando la durata si completa nella fascia oraria. Se era gia acceso da prima non parte")
+        if not m and not cur["tr"] and not trig and not rami and re.match(r"se\b", seg) and not re.search(r"\balle\b|tramonto|\balba\b|quando|mezzanotte|mezzogiorno", re.sub(r"\bdalle \d+ alle \d+", " ", p)):
+            ms_ = re.match(r"se\s+((?:piove|rileva movimento.*?|(?:non )?c'e'? (?:piu )?movimento.*?))(?=\s+(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|avvisami|mandami)|$)", seg)
+            if ms_:
+                m = re.match(r"se\b\s*(.*)$", seg)
         if m:
             corpo = m.group(1)
-            cmd = re.search(r"(?<!si )\b(?!(?:apro|apre|chiudo|chiude|accendo|accende|spengo|spegne)\b)(?:(?:%s)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
+            cmd = re.search(r"(?<!si )\b(?!(?:apro|apre|chiudo|chiude|accendo|accende|spengo|spegne|avvio|avvia il ciclo)\b)(?:(?:%s|metti|imposta)\b|%s|%s)" % (_V, _NOTIFICA, _ANNUNCIO), corpo)
             if cmd and re.match(r"si (?:accende|spegne|apre|chiude)", corpo):
-                cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
+                cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
             testo_ev = corpo[:cmd.start()] if cmd else corpo
             ms = re.fullmatch(r"\s*si (accende|spegne|apre|chiude)\s*", testo_ev)
             prima_tr = [t_ for r_ in rami + [cur] for t_ in r_["tr"] if str(t_.get("entity_id", "")).startswith(("light.", "switch.", "media_player.", "cover.", "fan.", "binary_sensor."))]
@@ -488,16 +650,21 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             if ee.startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) and not comandate:
                 ultimi = [ee]
             seg = (seg[:m.start()] + " " + (corpo[cmd.start():] if cmd else "")).strip()
+        if m:
+            casa.contesto = [r_ for r_ in STANZE if re.search(r"\b%s\b" % r_, testo_ev)] or casa.contesto
         # se ... (condizione sui pezzi che seguono)
         m = re.search(r"\b(?:solo se|se|ma solo se|purche)\b\s+(.*)$", seg)
         if m:
             corpo = m.group(1)
-            cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
+            cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
             c = condizione(corpo[:cmd.start()] if cmd else corpo, casa, avv)
             if not c:
                 return None
             prima = seg[:m.start()].strip()
             resto_seg = corpo[cmd.start():] if cmd else ""
+            if not _resto(resto_seg) and not _resto(prima) and re.search(r"\bsolo se\b|\bpurche\b", m.group(0)) and cur["az"] and not trig:
+                cur["cond"].append(c)   # "accendi X, ma solo se Y, e poi...": la condizione riguarda quello gia detto
+                continue
             prefisso = bool(_resto(resto_seg) or not _resto(prima))
             if prefisso:
                 sospese.append(c); seg = (prima + " " + resto_seg).strip()
@@ -547,6 +714,11 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             if not txt or len(nominati) != 1:
                 return None
             azioni.append({"action": "assist_satellite.announce", "target": {"entity_id": nominati[0]["entity_id"]}, "data": {"message": txt}})
+        elif re.search(r"\b(?:riporta|rimanda|manda|torna)\b.*\b(?:robot|aspirapolvere)\b.*\bbase\b", seg):
+            rb = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "vacuum" and casa.vivo(s_)]
+            if len(rb) != 1 or _resto(re.sub(r"\b(?:riporta|rimanda|manda|robot|aspirapolvere|base)\b", " ", seg)):
+                return None
+            azioni.append({"action": "vacuum.return_to_base", "target": {"entity_id": rb[0]}})
         elif re.search(r"\bvolume\b", seg) and re.search(r"\d{1,3}", seg):
             mvol = re.search(r"\b(?:metti|imposta|porta|abbassa|alza|regola)\b", seg)
             mn_ = re.search(r"\b(?:al|a)\s+(\d{1,3})\s*(?:%|per ?cento)?", seg) or re.search(r"(\d{1,3})\s*(?:%|per ?cento)", seg)
@@ -562,7 +734,20 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             if not cand:
                 return None
             azioni.append({"action": "media_player.volume_set", "target": {"entity_id": cand[0]}, "data": {"volume_level": int(mn_.group(1)) / 100}})
+        elif re.search(r"\b(?:termostato|climatizzatore|condizionatore|riscaldamento)\b", seg) and re.search(r"\b(?:a|ai|su)\s+\d{1,2}(?:[.,]5)?\s*(?:gradi|°)", seg):
+            mg = re.search(r"\b(?:a|ai|su)\s+(\d{1,2}(?:[.,]5)?)\s*(?:gradi|°c?)", seg)
+            resto = _togli(seg, mg)
+            mi_ = re.search(r"\b(?:imposta|metti|porta|regola)\b", resto)
+            if not mi_:
+                return None
+            ids, resto = apparecchi(_togli(resto, mi_), casa, avv)
+            if not ids or _resto(resto):
+                return None
+            gr = float(mg.group(1).replace(",", ".")); gr = int(gr) if gr == int(gr) else gr
+            azioni.append({"action": "climate.set_temperature", "target": {"entity_id": ids[0]}, "data": {"temperature": gr}})
         else:
+            if re.search(r"\b(?:metti|imposta)\b.*\b(?:luc\w*|lamp\w*|farett\w*|piantana)\b.*\bal\s+\d{1,3}\s*(?:%|per ?cento)", seg):
+                seg = re.sub(r"\b(?:metti|imposta)\b", "accendi", seg)
             mv = re.search(r"\b(%s)\b" % _V, seg)
             if mv:
                 parola = mv.group(1)
@@ -608,7 +793,25 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
                 for e in ids:
                     per_dom.setdefault(core._dom(e), []).append(e)
                 for d, es in per_dom.items():
-                    if d == "cover":
+                    if d in ("switch", "fan") and verbo in ("start", "stop"):
+                        srv = "turn_on" if verbo == "start" else "turn_off"
+                    elif verbo in ("start", "stop"):
+                        if d != "vacuum":
+                            return None
+                        srv = verbo
+                    elif verbo in ("lock", "unlock"):
+                        if d != "lock":
+                            return None
+                        srv = verbo
+                    elif d == "lock":
+                        if verbo != "close_cover":   # "apri la serratura" resta da scrivere a mano: sblocco solo se detto "sblocca"
+                            return None
+                        srv = "lock"
+                    elif d == "vacuum":
+                        if verbo != "turn_on":
+                            return None
+                        srv = "start"
+                    elif d == "cover":
                         srv = {"turn_on": "open_cover", "turn_off": "close_cover"}.get(verbo, verbo)
                     elif verbo in ("turn_on", "turn_off"):
                         srv = verbo

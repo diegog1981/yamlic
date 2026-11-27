@@ -10,7 +10,7 @@ import micro
 _UNITA = {"second": "seconds", "minut": "minutes", "or": "hours"}
 
 
-_VUOLE_ACCENDERE = re.compile(r"accend|attiv|avvia|illumin|metti|imposta|fai partire|riprend|\bluc[ei] a|%|apri")
+_VUOLE_ACCENDERE = re.compile(r"accend|attiv|avvia|avvio|illumin|metti|imposta|fai partire|riprend|\bluc[ei] a|%|apri")
 
 
 def ripulisci(prompt, y, states):
@@ -76,7 +76,7 @@ def controlla(prompt, y, states):
         return ["lo YAML non e leggibile"]
     if not docs or not all(isinstance(d, dict) for d in docs):
         return ["manca un'automazione valida"]
-    p = " ".join(micro._n(prompt).split())
+    p = micro.parlato(" ".join(micro._n(prompt).split()))
     # il testo di notifiche e annunci non conta come richiesta
     q = re.sub(r"\b(avvis\w+|notific\w+|annunci\w+|notifica)\b(.*?)\bche\b.*?(?=$|[.;]| e poi | poi )", r"\1\2", p)
     # "la striscia LED sotto la TV" e il nome di una luce: li la TV non e un bersaglio
@@ -165,9 +165,9 @@ def controlla(prompt, y, states):
     # giorni
     giorni = {g for n in tutti for g in _lista(n.get("weekday"))}
     attesi = set()
-    if re.search(r"feriali|lavorativi|dal lunedi al venerdi", q):
+    if re.search(r"feriali|lavorativi|dal lunedi al venerdi|(?:tranne|escluso|eccetto) (?:il |nel )?(?:weekend|fine settimana)", q):
         attesi = set(micro.FERIALI)
-    elif re.search(r"weekend|fine settimana", q):
+    elif re.search(r"weekend|fine settimana|sabato e (?:la )?domenica", q):
         attesi = set(micro.WEEKEND)
     else:
         attesi = {v for k, v in micro.GIORNI_IT.items() if re.search(r"\b(?:ogni|il|la|solo)\s+%s\b" % k, q)}
