@@ -230,6 +230,17 @@ class Casa:
             best.append((p, e))
         return [max(best)[1]] if best else []
 
+    def tv_tutte(self, stanze=()):
+        out = []
+        for s in self.states:
+            e, t = s["entity_id"], self.testo(s)
+            if core._dom(e) != "media_player" or not self.vivo(s) or not (self.classe(s) == "tv" or re.search(r"\btv\b|televis", t)):
+                continue
+            if re.search(r"soundbar|spotify|tablet|tab a\d", t) or (stanze and not self._in_stanza(s, stanze, True)):
+                continue
+            out.append(e)
+        return out
+
     def unico(self, parola):
         """La parola e nel nome di una sola entita comandabile e non e generica."""
         if len(parola) < 6 or parola in STANZE or parola in core.GENERIC or re.fullmatch(_COSE + "|" + _APPARECCHI, parola):
@@ -398,6 +409,7 @@ def bersagli(frase, casa, avv, verbo=None):
                 trovati = (veri or trovati)[:1]
             if singolare and not stanza and not casa.domande:
                 trovati = []
+        trovati = decidi(casa, cosa, stanza, trovati, frase[:m.start()], avv)
         if not trovati:
             return None, frase
         ids += [e for e in trovati if e not in ids]
@@ -419,6 +431,29 @@ def bersagli(frase, casa, avv, verbo=None):
         ids = esatti[:1]
         frase = re.sub(r"\b%s\b" % re.escape(nm), " ", frase)
     return ids, frase
+
+
+_SINGOLARI = ("luce", "lampada", "lampadina", "tenda", "tapparella", "serranda", "tv", "tele", "televisione", "televisore")
+
+
+def decidi(casa, cosa, stanza, trovati, prima, avv):
+    """Regola unica: uno solo -> quello; plurale/"tutte" -> tutti; singolare con piu candidati -> domanda; nessuno -> "non trovo"."""
+    plurale = cosa not in _SINGOLARI or bool(re.search(r"\btutt\w*\s+(?:le\s+|i\s+|gli\s+)?$", prima))
+    tv = cosa.startswith(("tv", "tele"))
+    if tv:
+        tutte = casa.tv_tutte([stanza] if stanza else [])
+        if len(tutte) > 1:
+            trovati = tutte
+    if not trovati and casa.domande:
+        altre = casa.tv_tutte() if tv else casa.tende() if cosa.startswith(("tend", "tappar", "serrand")) else casa.luci()
+        dove = (" in " + stanza) if stanza else ""
+        raise Domanda("ent:" + cosa + (" " + stanza if stanza else ""), "Non trovo %s%s. Quale intendi?" % (cosa, dove), _opz(casa, altre[:8]), multi=True, riscrivi=True)
+    if plurale or len(trovati) <= 1:
+        return trovati
+    if casa.domande:
+        return scegli(casa, "ent:" + cosa + (" " + stanza if stanza else ""), "\"%s%s\": quale intendi?" % (cosa, " " + stanza if stanza else ""), trovati)
+    avv.append("\"%s%s\" puo essere: %s. Controlla il bersaglio" % (cosa, " " + stanza if stanza else "", ", ".join(casa.nome(e) for e in trovati)))
+    return trovati[:1]
 
 
 def escludi(ids, testo, casa, avv):
@@ -874,11 +909,32 @@ def pezzo_ai(casa, tipo, testo, avv):
         return None
     out = casa.chiedi_pezzo(tipo, testo.replace("e'", "è")) if getattr(casa, "chiedi_pezzo", None) else None
     if out:
+        out = rifai_entita(casa, testo, out, avv)
+    if out:
         avv.append("\"%s\": capito con l'AI, controlla il riassunto" % testo.replace("e'", "è"))
         return out
     if casa.domande:
         raise Domanda("riscrivi:" + testo, "Questo pezzo non lo capisco: \"%s%s\". Riscrivi solo questo, per esempio %s." % ("quando " if tipo == "evento" else "se ", testo.replace("e'", "è"), _ESEMPI[tipo]), riscrivi=True)
     return None
+
+
+def rifai_entita(casa, testo, out, avv):
+    """Dell'entita proposta dall'AI tengo il tipo; la scelta la rifa Yamlic con le parole del pezzo.
+    Uguale -> ok; diversa dello stesso tipo -> uso la mia; di un altro tipo -> scarto; dubbia -> domanda (dalla regola unica)."""
+    import json as _j
+    testo_out = _j.dumps(out)
+    for e in sorted(set(re.findall(r'"([a-z_]+\.[a-z0-9_]+)"', testo_out))):
+        if e in ("zone.home", "sun.sun") or e.startswith(("person.", "weather.")) or e not in casa.by:
+            continue
+        ids, _ = bersagli(testo, casa, [])   # puo fare domanda se la scelta e dubbia
+        if not ids or e in ids:
+            continue
+        if len(ids) == 1 and core._dom(ids[0]) == core._dom(e):
+            avv.append("\"%s\": l'AI aveva scelto %s, uso %s" % (testo, casa.nome(e), casa.nome(ids[0])))
+            testo_out = testo_out.replace('"%s"' % e, '"%s"' % ids[0])
+        else:
+            return None
+    return _j.loads(testo_out)
 
 
 def da_condizioni(cs):
