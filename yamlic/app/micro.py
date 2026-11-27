@@ -208,6 +208,9 @@ def bersagli(frase, casa, avv, verbo=None):
         return None, frase
     for w in re.findall(r"[a-z]+", frase):   # "il lampadario", "la piantana"
         u = casa.unico(w)
+        intero = casa.per_nome(frase)[1]
+        if len(intero.split()) >= 2 and w in intero.split():   # parte di un nome detto per intero ("faretti veletta")
+            u = None
         if u and not re.search(r"\b%s\s+(?:del|della|dell'|in|nel)" % w, frase) and u not in ids:
             ids.append(u); frase = re.sub(r"\b%s\b" % w, " ", frase, count=1)
     # "stufetta del bagno" -> entita che si chiama "Stufetta bagno"
@@ -449,7 +452,7 @@ def condizione(testo, casa, avv):
         return {"condition": "numeric_state", "entity_id": "zone.home", "below": 1}
     if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' )(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "above": 0}
-    if re.fullmatch(r"(?:e' |e |fa )?(?:gia )?buio|e' notte", t):
+    if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"}
@@ -559,7 +562,30 @@ def parlato(p):
     p = re.sub(r"\b(alle \d{1,2}(?:[:.]\d\d)?) (?:tutte le sere|tutti i giorni|ogni giorno)\b", r"\1", p)
     p = re.sub(r"\b(luce|luci)( (?:del|della|dell') ?\w+) e (?=(?:del|della|dell')\b)", r"\1\2 e le luci ", p)
     p = " ".join(p.split())
+    # "le tende di cucina e soggiorno" -> una frase completa per stanza
+    r_ = "|".join(STANZE)
+    prep = r"(?:(?:di|del|dello|della|dell'|in|nel|nella|nell') ?)"
+    rx = r"\b(tende|tapparelle|serrande|luci|faretti)( %s(?:%s))(?:,| e) (%s)?(?=(?:%s)\b)" % (prep, r_, prep, r_)
+    prima = None
+    while prima != p:
+        prima = p
+        p = re.sub(rx, lambda m: "%s%s e %s %s %s" % (m.group(1), m.group(2), "i" if m.group(1) == "faretti" else "le", m.group(1), m.group(3) or "di "), p)
     return p
+
+
+def ripeti_verbo(p):
+    """"accendi X e le Y" -> "accendi X e accendi le Y": ogni micro-frase e completa (per le regole e per l'AI)."""
+    if re.search(r"\b(?:tranne|eccetto|esclus\w+|ma non|volume|per \d+|per un|dopo \d+)\b|%|per ?cento|gradi", p):
+        return p
+    pezzi = re.split(r"([.;,]| poi )", p)
+    for i, z in enumerate(pezzi):
+        m = re.search(r"\b((?:ri)?(?:accendi|spegni|apri|chiudi)|alza|abbassa)\s", z)
+        if m:
+            coda = re.split(r"(\b(?:quando|appena|se)\b)", z[m.end():], maxsplit=1)
+            if not re.search(r"\b(?:alle|all'|tramonto|alba|mezzanotte|mezzogiorno)\b", coda[0]):   # l'orario in fondo vale per tutto l'elenco
+                coda[0] = re.sub(r" e (?=(?:il |lo |la |i |gli |le |l'))", " e %s " % m.group(1), coda[0])
+            pezzi[i] = z[:m.end()] + "".join(coda)
+    return "".join(pezzi)
 
 
 def costruisci(prompt, states, notify=(), io="", chiedi=None):
@@ -585,7 +611,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
     m = re.search(r"\b(luce|tapparella|tenda)\b(?=.*\bquell[ae] (?:del|della|dell'|in))", p)
     if m:
         p = re.sub(r"\bquella (?=del|della|dell'|in )", m.group(1) + " ", p)
-    p = parlato(p)
+    p = ripeti_verbo(parlato(p))
     segs = [s.strip(" ,") for s in _TAGLIO.split(p) if s and s.strip(" ,")]
     rami, cur = [], {"tr": [], "cond": [], "az": []}
     giorni_tutti, sospese, ultimi, chieste = None, [], [], 0
@@ -622,7 +648,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
         m = re.search(r"\b(?:quando|appena|ogni volta che|non appena)\b\s*(.*)$", seg)
         if not m and not cur["tr"] and not trig and re.match(r"se\b", seg) and re.search(r"\b(?:resta|rimane|si (?:accende|spegne|apre|chiude))\b", seg):
             m = re.match(r"se\b\s*(.*)$", seg)
-            if cond:
+            if cond and re.search(r"\b(?:resta|rimane)\b", seg):
                 avv.append("\"resta acceso dopo le...\": scatta solo quando la durata si completa nella fascia oraria. Se era gia acceso da prima non parte")
         if not m and not cur["tr"] and not trig and not rami and re.match(r"se\b", seg) and not re.search(r"\balle\b|tramonto|\balba\b|quando|mezzanotte|mezzogiorno", re.sub(r"\bdalle \d+ alle \d+", " ", p)):
             ms_ = re.match(r"se\s+((?:piove|rileva movimento.*?|(?:non )?c'e'? (?:piu )?movimento.*?))(?=\s+(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|avvisami|mandami)|$)", seg)
@@ -774,6 +800,7 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None):
             if not ids or _resto(resto):
                 # il pezzo non e capito: lo chiedo al modello, da solo
                 frase = " ".join((parola if mv else "") .split() + [seg if not mv else _togli(seg, mv)]).strip()
+                frase = frase.replace("e'", "è")
                 fatte = chiedi(frase) if chiedi and not anafora and eccez is None else None
                 if not fatte:
                     return None

@@ -12,6 +12,8 @@ _UNITA = {"second": "seconds", "minut": "minutes", "or": "hours"}
 
 _VUOLE_ACCENDERE = re.compile(r"accend|attiv|avvia|avvio|illumin|metti|imposta|fai partire|riprend|\bluc[ei] a|%|apri")
 
+_VUOLE_POSIZIONE = re.compile(r"%|per ?cento|\bmeta\b|posizione|\b(?:al|a) \d{1,3}\b(?![:.]\d| minut| second| or)")
+
 
 def ripulisci(prompt, y, states):
     """Correzioni sicure: toglie le accensioni non richieste e sostituisce una TV spenta/inesistente con quella vera."""
@@ -49,6 +51,18 @@ def ripulisci(prompt, y, states):
         nuove = pulisci(cfg["actions"])
         if nuove:
             cfg["actions"] = nuove
+    if re.search(r"\bbuio\b", p):   # "se e buio": after sunset da solo vale solo fino a mezzanotte
+        for n in list(_passi(cfg)):
+            if n.get("condition") == "sun" and not any(k.endswith("offset") for k in n):
+                n.clear(); n.update({"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"})
+                avv.append("'buio' = sole sotto l'orizzonte (sun.sun)")
+    if not _VUOLE_POSIZIONE.search(p):
+        for n in list(_passi(cfg)):
+            pos = (n.get("data") or {}).get("position") if n.get("action") == "cover.set_cover_position" else None
+            if pos in (0, 100):
+                n["action"] = "cover.open_cover" if pos else "cover.close_cover"
+                del n["data"]
+                avv.append("posizione %d scritta come apri/chiudi" % pos)
     if not avv:
         return y, []
     return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip("\n"), list(dict.fromkeys(avv))
@@ -228,4 +242,32 @@ def controlla(prompt, y, states):
                     for e in _lista((a.get("target") or {}).get("entity_id")):
                         if e not in ammesse:
                             err.append("%s non e una luce di '%s'" % (e, "' o '".join(dette)))
+    # "buio": una condizione sun con un solo lato non copre tutta la notte
+    if re.search(r"\bbuio\b", q) and any(n.get("condition") == "sun" and ("after" in n) != ("before" in n) and not any(k.endswith("offset") for k in n) for n in tutti):
+        err.append("per 'buio' usa condition: state, entity_id: sun.sun, state: below_horizon (after sunset da solo non vale al mattino)")
+    # posizione delle tende solo se chiesta
+    if not _VUOLE_POSIZIONE.search(q):
+        for a in azioni:
+            if a["action"] == "cover.set_cover_position":
+                err.append("la posizione delle tende non e stata chiesta: usa cover.open_cover o cover.close_cover")
+    casa = micro.Casa(states)
+    esclude = re.search(r"\b(?:tranne|eccetto|esclus\w+|ma non)\b", q)
+    # tende di ogni stanza nominata nel comando
+    if not esclude and re.search(r"\b(?:apri|chiudi|alza|abbassa)", q):
+        for m in re.finditer(r"\b(tend[ae]|tapparell[ae]) (?:di|del|della|dell'|in|nel|nella) ?(%s)\b(?! (?:e'|sono|e |si ))" % "|".join(micro.STANZE), q):
+            delle = set(casa.tende([m.group(2)]))
+            mancano = delle - set(ids)
+            if delle and (mancano == delle or (m.group(1) in ("tende", "tapparelle") and mancano)):
+                err.append("mancano le tende di '%s': %s" % (m.group(2), ", ".join(sorted(mancano))))
+    # ogni dispositivo chiamato per nome deve esserci
+    if not esclude:
+        nomi = {}
+        for s in states:
+            nm = " ".join(micro._n((s.get("attributes") or {}).get("friendly_name", "")).split())
+            if s["entity_id"].split(".")[0] in ("light", "switch", "fan", "cover") and casa.vivo(s) and len(nm.split()) >= 2:
+                nomi.setdefault(nm, []).append(s["entity_id"])
+        for nm, es in nomi.items():
+            if re.search(r"\b(?:accendi|spegni|apri|chiudi|alza|abbassa)\w* (?:[\w']+ ){0,3}?%s\b" % re.escape(nm), q) and not set(es) & set(ids):
+                if not any(o != nm and nm in o and o in q for o in nomi):
+                    err.append("manca '%s' (%s)" % (nm, es[0]))
     return list(dict.fromkeys(err))
