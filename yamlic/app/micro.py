@@ -1035,7 +1035,11 @@ def scena(prompt, casa, notify, io, chiedi):
             stati[e] = st
     if tieni:
         ids, resto = bersagli(tieni, casa, [])
-        if not ids or _resto(resto):
+        if not ids or _resto(resto):   # parole cercate anche nel codice dell'entita ("striscia" in light.striscia_luminosa)
+            parole = [w for w in _resto(tieni) if len(w) > 2]
+            cand = [e for e in casa.luci() if parole and all(re.search(r"\b%s" % re.escape(w), casa.testo(casa.by[e])) for w in parole)]
+            ids = cand if len(cand) == 1 else ids if ids and not _resto(resto) else []
+        if not ids:
             if not casa.domande:
                 return None
             ids = scegli(casa, "ent:" + tieni, "Scena %s: quale luce resta accesa (\"%s\")?" % (nome, tieni), sorted(casa.luci(), key=casa.nome))
