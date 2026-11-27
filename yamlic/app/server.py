@@ -230,7 +230,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.43"
+VERSIONE = "0.4.0"
 _RETE = {"t": 0, "v": None}
 
 
@@ -276,9 +276,8 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
     vie = []
 
     def chiedi(frase):
-        SENZA_GIRI.on = True
         try:
-            r = _genera_uno(frase, None, "", True, states, micro_chiamata=True)
+            r = _genera_uno(frase, None, "", True, states, micro_chiamata=True, extra=lambda y: core.blocco(y, frase, states))
             cfg = yaml.safe_load(r.get("yaml") or "")
             acts = cfg.get("actions") if isinstance(cfg, dict) else None
             if not acts or not all(isinstance(a, dict) and "action" in a for a in acts):
@@ -290,10 +289,25 @@ def _micro(prompt, stati, risposte=None, persona="", domande=False):
         except Exception:
             return None
         finally:
-            SENZA_GIRI.on = False
+            pass
+
+    def pezzo(tipo, testo):
+        """Un pezzo (evento o condizione) che le regole non capiscono: lo scrive l'AI, noi controlliamo e le rimandiamo gli errori."""
+        frase = ("Quando %s, avvisami" if tipo == "evento" else "Alle 12:00, se %s, avvisami") % testo
+        try:
+            r = _genera_uno(frase, None, io, True, states, micro_chiamata=True, extra=lambda y: core.pezzo_errori(tipo, y, testo, states))
+            y = r.get("yaml")
+            if not y or core.pezzo_errori(tipo, y, testo, states):
+                return None
+            vie.append(r["stats"]["via"])
+            return core.pezzo_estrai(tipo, y)
+        except Exception as ex:
+            print("pezzo AI: %s" % str(ex)[:120], flush=True)
+            return None
     io = persona or OPT.get("io_person") or ""
     try:
-        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi, risposte, domande, None if stati else memoria.carica()["memoria"])
+        r = micro.costruisci(prompt, states, [] if stati else servizi_notify(), io, chiedi, risposte, domande, None if stati else memoria.carica()["memoria"],
+                             pezzo if flag("ai_pezzi", True) else None)
     except Exception as ex:
         print("micro: errore %s" % str(ex)[:120], flush=True)
         return None
@@ -336,7 +350,7 @@ def _proponi(d, prompt, states, persona):
         print("proposta AI: %s" % str(ex)[:120], flush=True)
 
 
-def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_chiamata=False):
+def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_chiamata=False, extra=None):
     states = stati if micro_chiamata else _stati(stati, prompt)
     io = persona or OPT.get("io_person") or ""
     if not scelte and not salta and not persona:
@@ -444,7 +458,7 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
 
     grezzo = y
     y, tolte, avvisi = correggi(y)
-    errori = verifica.controlla(intera, y, states)
+    errori = verifica.controlla(intera, y, states) + (extra(y) if extra else [])
     giri = 0
     # domanda e risposta: rimando al modello gli errori precisi (massimo 2 correzioni, tengo la migliore)
     testo_prec = text_of(res)
@@ -466,7 +480,7 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None, micro_
             if anon:
                 y2 = anon.restore(y2)
             y2, tolte2, avvisi2 = correggi(y2)
-            err2 = verifica.controlla(intera, y2, states)
+            err2 = verifica.controlla(intera, y2, states) + (extra(y2) if extra else [])
         except Exception:
             break
         if len(err2) < len(errori):

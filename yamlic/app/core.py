@@ -1794,3 +1794,98 @@ def coerente(y, prompt):
     if re.search(r"robot|aspirapolvere", p) and re.search(r"finit|fermat|bloccat", p) and not re.search(r"trigger: state\n\s*entity_id: vacuum", t):
         return False
     return True
+
+
+# ================= 0.4.0: pezzi scritti dall'AI =================
+_PERT = ((r"zone\.home", r"casa|nessuno|qualcuno|tutti|\besc|torn|rientr|arriv|vuot|parti|via\b"),
+         (r"sun\.sun", r"buio|notte|giorno|chiaro|sole|tramonto|alba|luce del giorno"),
+         (r"weather\.", r"piov|pioggia|meteo|neve|nev|vento|sole|nuvol|tempo|temporale|grandin"))
+_CLASSE_PAROLA = {"motion": r"moviment|presenz|passa|entra", "occupancy": r"moviment|presenz", "door": r"port", "window": r"finestr",
+                  "temperature": r"temperatur|gradi|caldo|freddo", "humidity": r"umidit", "power": r"consum|potenz|watt|finit|lavatric|lavastovigl",
+                  "moisture": r"acqua|perdit|allag", "smoke": r"fumo", "illuminance": r"luminosit|buio|luce"}
+
+
+def _parti(y, tipo):
+    try:
+        cfg = yaml.safe_load(y)
+    except Exception:
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    if tipo == "evento":
+        return [t for t in cfg.get("triggers") or [] if isinstance(t, dict)]
+    cs = [c for c in cfg.get("conditions") or [] if isinstance(c, dict)]
+    for a in cfg.get("actions") or []:
+        if isinstance(a, dict) and isinstance(a.get("if"), list):
+            cs += [c for c in a["if"] if isinstance(c, dict)]
+    return cs
+
+
+def _entita_in(n):
+    out = []
+    if isinstance(n, dict):
+        for k, v in n.items():
+            if k == "entity_id":
+                out += _ents(v)
+            elif isinstance(v, (dict, list)):
+                out += _entita_in(v)
+    elif isinstance(n, list):
+        for v in n:
+            out += _entita_in(v)
+    return out
+
+
+def pertinente(e, testo, states):
+    p = " ".join(testo.lower().replace("’", "'").split())
+    for rx, parole in _PERT:
+        if re.match(rx, e):
+            return bool(re.search(parole, p))
+    s = next((x for x in states if x["entity_id"] == e), None)
+    if not s:
+        return False
+    a = s.get("attributes") or {}
+    if e.startswith("person."):
+        nome = (a.get("friendly_name") or "").lower().split()
+        return bool(nome and nome[0] in p) or bool(re.search(r"\b(?:io|esco|torno|rientro|arrivo|sono)\b", p))
+    rx_c = _CLASSE_PAROLA.get(a.get("device_class") or "")
+    if rx_c and re.search(rx_c, p):
+        return True
+    testo_e = _t(s).lower()
+    parole = {w[:-1] for w in re.findall(r"[a-z]{4,}", p) if w not in _VUOTE}
+    if any(w in testo_e for w in parole):
+        return True
+    return any(re.search(rx, p) and _dom(e) in ds and (_dom(e) != "switch" or is_light_like(e, testo_e)) for rx, ds in _CATEGORIE)
+
+
+def pezzo_errori(tipo, y, testo, states):
+    """Errori precisi da rimandare all'AI (solo entity_id, mai nomi: escono anonimizzati)."""
+    parti = _parti(y, tipo)
+    if parti is None:
+        return ["lo YAML non e leggibile"]
+    if not parti:
+        return ["manca %s per \"%s\"" % ("il trigger" if tipo == "evento" else "la condizione", testo)]
+    err = []
+    known = {s["entity_id"] for s in states}
+    ammessi = {"state", "numeric_state", "sun", "time", "zone", "time_pattern"} if tipo == "evento" else {"state", "numeric_state", "sun", "time", "zone", "or", "and", "not"}
+    p = testo.lower()
+    for x in parti:
+        k = x.get("trigger") if tipo == "evento" else x.get("condition")
+        if k not in ammessi:
+            err.append("tipo non adatto: %s" % k)
+        if k == "sun" and not re.search(r"buio|notte|giorno|sole|tramonto|alba|sera|mattin", p):
+            err.append("\"%s\" non parla di sole o di buio: non usare sun" % testo)
+        if k in ("time", "time_pattern") and not re.search(r"\d|mezzanotte|mezzogiorno|ora|ore|minut|sera|mattin|notte", p):
+            err.append("\"%s\" non dice un orario: non usare time" % testo)
+    for e in _entita_in(parti):
+        if e not in known:
+            err.append("entita inesistente: %s" % e)
+        elif not pertinente(e, testo, states):
+            err.append("%s non c'entra con \"%s\": usa un'entita che corrisponde" % (e, testo))
+    tutto = validate(y, known, "")
+    err += [m for m in tutto if re.search(r"trigger|stato|condizion|numeric|entita inesistente", m)]
+    return list(dict.fromkeys(err))
+
+
+def pezzo_estrai(tipo, y):
+    parti = _parti(y, tipo)
+    return (parti, []) if tipo == "evento" else parti

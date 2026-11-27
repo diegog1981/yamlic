@@ -186,6 +186,27 @@ class Casa:
             return self.luci(stanze, True)
         return out
 
+    def incerti(self, stanze):
+        """Interruttori della stanza di cui non si sa cosa comandano (potrebbero essere luci)."""
+        out = []
+        for s in self.states:
+            e, t = s["entity_id"], core._t(s)
+            if core._dom(e) != "switch" or not self.vivo(s) or core.NOT_LIGHT.search(t) or core.LIGHT_LIKE.search(t):
+                continue
+            if (s.get("attributes") or {}).get("_funzione") not in (None, "", "luce"):
+                continue
+            if self._in_stanza(s, stanze, True):
+                out.append(e)
+        return out
+
+    def dubbia(self, e, stanze):
+        """Il nome cita anche un'altra stanza: "Ingresso bagno" fra le luci dell'ingresso."""
+        gruppi = set()
+        for r in stanze:
+            gruppi |= core.room_words(r)
+        nm = _n(self.nome(e))
+        return any(re.search(r"\b%s\b" % r, nm) for r in STANZE if r not in gruppi and r not in ("isola", "tavolo", "esterno"))
+
     def tende(self, stanze=()):
         return [s["entity_id"] for s in self.states if core._dom(s["entity_id"]) == "cover" and self.vivo(s)
                 and self.classe(s) not in ("garage", "gate", "door") and (not stanze or self._in_stanza(s, stanze))]
@@ -343,6 +364,12 @@ def bersagli(frase, casa, avv, verbo=None):
                     return None, frase
                 trovati = scegli(casa, "ent:" + cosa, "Quali faretti?", trovati)
             singolare = cosa in ("luce", "lampada", "lampadina")
+            if st and casa.domande:   # stanza detta: guardo anche i nomi che citano piu stanze ("Ingresso bagno", "Luce bagno camera")
+                larghi = [e for e in casa.luci(st, True) + casa.incerti(st) if e not in trovati]
+                if singolare:
+                    trovati = trovati + larghi
+                elif not tutte and any(casa.dubbia(e, st) for e in trovati + larghi):
+                    trovati = scegli(casa, "ent:" + cosa + " " + stanza, "\"%s %s\": quali intendi?" % (cosa, stanza), trovati + larghi)
             if singolare and len(trovati) > 1 and casa.domande:
                 dove = " " + stanza if stanza else ""
                 trovati = scegli(casa, "ent:" + cosa + dove, "\"%s%s\": quale intendi?" % (cosa, dove), trovati)
@@ -807,6 +834,24 @@ def descrivi(azioni, casa):
     return " + ".join(out)
 
 
+_ESEMPI = {"evento": "\"la luce del corridoio resta accesa per 10 minuti\", \"il robot torna alla base\", \"Martina esce di casa\"",
+           "condizione": "\"la TV e accesa\", \"c'e qualcuno in casa\", \"e buio\""}
+
+
+def pezzo_ai(casa, tipo, testo, avv):
+    """Evento o condizione non capiti dalle regole: li chiedo all'AI da soli; se non regge, chiedo all'utente solo questo pezzo."""
+    testo = " ".join(testo.split()).strip(" ,")
+    if not testo:
+        return None
+    out = casa.chiedi_pezzo(tipo, testo.replace("e'", "è")) if getattr(casa, "chiedi_pezzo", None) else None
+    if out:
+        avv.append("\"%s\": capito con l'AI, controlla il riassunto" % testo.replace("e'", "è"))
+        return out
+    if casa.domande:
+        raise Domanda("riscrivi:" + testo, "Questo pezzo non lo capisco: \"%s%s\". Riscrivi solo questo, per esempio %s." % ("quando " if tipo == "evento" else "se ", testo.replace("e'", "è"), _ESEMPI[tipo]), riscrivi=True)
+    return None
+
+
 def da_condizioni(cs):
     """"se A e B fai X": un trigger per ogni condizione che diventa vera. None se una non si sa trasformare."""
     out = []
@@ -849,10 +894,11 @@ def presenza(prompt, casa):
     return {"yaml": yaml.dump(cfg, Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=1000).rstrip("\n"), "avvisi": avv, "modello": 0, "frase": prompt, "fisso": True}
 
 
-def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False, memoria=None):
+def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False, memoria=None, pezzo=None):
     """Come _costruisci; con domande=True un pezzo dubbio diventa {"domanda": ...} invece di None."""
     casa = Casa(states)
     casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
+    casa.chiedi_pezzo = pezzo
     try:
         r = presenza(prompt, casa) or _costruisci(prompt, casa, notify, io, chiedi)
     except Domanda as d:
@@ -969,11 +1015,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                 stato = {"accende": "on", "spegne": "off", "apre": "open", "chiude": "closed"}[ms.group(1)]
                 r = ({"trigger": "state", "entity_id": soggetto, "to": stato}, [])
             else:
-                r = evento(testo_ev, casa, io, avv)
+                r = evento(testo_ev, casa, io, avv) or pezzo_ai(casa, "evento", testo_ev, avv)
             if not r:
                 return None
-            trig.append(r[0]); ev_cond = r[1]
-            ee = r[0].get("entity_id", "")
+            trs_ = r[0] if isinstance(r[0], list) else [r[0]]
+            trig += trs_; ev_cond = r[1]
+            ee = str(trs_[0].get("entity_id", "")) if trs_ else ""
             if ee.startswith(("light.", "switch.", "cover.", "media_player.", "fan.")) and not comandate:
                 ultimi = [ee]
             seg = (seg[:m.start()] + " " + (corpo[cmd.start():] if cmd else "")).strip()
@@ -984,7 +1031,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         if m:
             corpo = m.group(1)
             cmd = re.search(r"\b(?:(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|blocca|sblocca|metti|imposta)\w*|%s|%s)" % (_NOTIFICA, _ANNUNCIO), corpo)
-            cs = condizioni(corpo[:cmd.start()] if cmd else corpo, casa, avv)
+            cs = condizioni(corpo[:cmd.start()] if cmd else corpo, casa, avv) or pezzo_ai(casa, "condizione", corpo[:cmd.start()] if cmd else corpo, avv)
             if not cs:
                 return None
             prima = seg[:m.start()].strip()
