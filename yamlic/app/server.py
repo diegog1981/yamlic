@@ -143,6 +143,8 @@ def ha(path, data=None):
         return json.loads(raw) if raw else None
 
 
+RETE_LOCK = threading.Lock()
+DEBUG = threading.local()
 _NOTIFY = {"t": 0, "d": []}
 
 
@@ -190,7 +192,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.3.29"
+VERSIONE = "0.3.30"
 _RETE = {"t": 0, "v": None}
 
 
@@ -269,7 +271,8 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
                 except Exception:
                     return True
             def chiedi():
-                return asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE,
+                with RETE_LOCK:   # lo smistatore vecchio perde le richieste parallele della stessa identita
+                    return asyncio.run(rete.ask(IDENT, RELAYS, payload, accept=accept, direct=flag("diretto"), ice=ICE,
                                             adaptive=flag("voto_adattivo", True), escalate=dubbio, firma=lambda r: core.firma(core.extract_yaml(text_of(r)))))
             try:
                 res, node = chiedi()
@@ -284,6 +287,7 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
             return {"error": "rete non disponibile: %s%s" % (ex, (" / locale: " + err) if err else "")}
     if res is None:
         return {"error": "nessun modello disponibile (imposta llm_url, avvia un modello locale o attiva la rete)" + ((" - " + err) if err else "")}
+    grezzo = y
     y, tolte = core.clean(y, known)
     y = core.force_targets(y, scelte or [], prompt, known)
     y = core.fill_empty(y, states, prompt)
@@ -323,7 +327,10 @@ def _genera_uno(prompt, scelte=None, persona="", salta=False, stati=None):
         segn = {"prompt": an.prompt, "yaml": an.forward_yaml(y), "problems": [an.forward_yaml(p) for p in problems]}
     except Exception:
         segn = None
-    return {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+    out = {"segn": segn, "yaml": y, "problems": problems, "stats": {"secondi": round(time.time() - t0, 1), "via": via, "token_risposta": usage.get("completion_tokens")}}
+    if getattr(DEBUG, "on", False):
+        out["grezzo"] = grezzo
+    return out
 
 
 def generate(prompt, scelte=None, persona="", salta=False, stati=None):
@@ -478,6 +485,7 @@ class H(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(n) or b"{}")
             if self.path.endswith("/api/generate"):
+                DEBUG.on = bool(data.get("debug"))
                 self._send(200, generate(data.get("prompt", ""), data.get("scelte"), data.get("persona", ""), bool(data.get("salta")), data.get("stati")))
             elif self.path.endswith("/api/modifica"):
                 self._send(200, modifica(data))

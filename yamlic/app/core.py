@@ -1475,7 +1475,9 @@ def ripara(y, states, prompt, notify_ok=()):
                     a["target"] = {"entity_id": e}; mod[0] = True
                     avv.append("l'azione usava la TV ma chiedi una luce: messo %s" % e)
     # "le luci del salotto" (plurale): tutte le luci della stanza, non una sola
-    if re.search(r"\b(le|tutte le) luci (del|della|dello|dell'|in)\s*\w+", lp) and not re.search(r"tranne|eccetto|tutte le luci\b(?! (del|della|dell))", lp):
+    stanze_citate = sum(1 for g in ROOMS + [{"ingresso"}, {"corridoio"}] if any(re.search(r"\b%s\b" % w, lp) for w in g))
+    if re.search(r"\b(le|tutte le) luci (del|della|dello|dell'|in)\s*\w+", lp) and not re.search(r"tranne|eccetto|tutte le luci\b(?! (del|della|dell))", lp) \
+            and stanze_citate == 1 and not re.search(r"\be (i|il|la|le|lo|gli|l')\s*\w+", lp):
         luci = _luci_stanza(states, lp)
         if len(luci) > 1:
             for a in cfg.get("actions") or []:
