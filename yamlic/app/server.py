@@ -236,7 +236,7 @@ def text_of(res):
     return res["choices"][0]["message"]["content"]
 
 
-VERSIONE = "0.4.2"
+VERSIONE = "0.4.3"
 _RETE = {"t": 0, "v": None}
 
 
@@ -553,7 +553,11 @@ def vista_casa():
     nomi = {v["id"]: v["nome"] for v in voci}
     out = mappa.riassunto(voci)
     out["voci"] = [dict(v, mia=d["entita"].get(v["id"]) or {}) for v in voci if v["stato"] in ("ok", "dubbia") or v["id"] in d["entita"]]
-    out["stanze"] = sorted({r for v in voci for r in v["stanze"]} | {str(c.get("stanza")) for c in d["entita"].values() if c.get("stanza")})
+    st_ = {}
+    for r in [str(c.get("stanza")) for c in d["entita"].values() if c.get("stanza")] + [r for v in voci for r in v["stanze"]]:
+        k = mappa._UNICA.get(r.lower(), r.lower())
+        st_.setdefault(k, r[:1].upper() + r[1:])   # le stanze scritte da te vincono, senza doppioni
+    out["stanze"] = sorted(st_.values())
     out["memoria"] = [{"chiave": k, "testo": k.split(":", 1)[-1], "scelta": ", ".join(nomi.get(e, e) for e in v)} for k, v in d["memoria"].items()]
     return out
 
