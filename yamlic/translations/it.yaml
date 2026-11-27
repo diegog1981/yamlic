@@ -1,7 +1,7 @@
 configuration:
   modo:
     name: Dove far girare il modello
-    description: "auto = usa il tuo modello se c'è, altrimenti la rete. locale = solo il tuo modello. rete = solo la rete di nodi."
+    description: "auto = usa il tuo modello se c'è, altrimenti la rete. locale = solo il tuo modello, tutto resta in casa (scarica il modello, circa 1 GB). rete = solo la rete di nodi."
   usa_rete:
     name: Usa la rete di nodi
     description: "Se il tuo server è lento, la risposta viene chiesta a un nodo della rete. Prima di uscire da casa nomi, entità e testi vengono sostituiti da codici e rimessi a posto al ritorno: il nodo non vede la tua casa."
@@ -25,7 +25,7 @@ configuration:
     description: "Collega direttamente il tuo server al nodo, senza passare dallo smistatore. Attenzione: i due vedono l'indirizzo IP l'uno dell'altro. Lascialo spento se non sai cosa fa."
   model:
     name: Modello locale
-    description: "0.5b è più leggero, 1.5b è più preciso. Si scarica solo se il tuo server fa da nodo o se non usi la rete."
+    description: "0.5b è più leggero, 1.5b è più preciso. Si scarica solo se il tuo server fa da nodo, se scegli locale o se non usi la rete."
   context:
     name: Lunghezza del contesto
     description: "Quanto testo il modello locale può leggere in una volta. Lascia 2048 se non hai problemi."

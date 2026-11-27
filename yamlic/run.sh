@@ -6,9 +6,11 @@ get() { python3 -c "import core;v=core.load_options().get('$1','');print(str(v).
 LLM_URL=$(get llm_url)
 NODO=$(get nodo)
 USA_RETE=$(get usa_rete)
+MODO=$(get modo)
 NEED_MODEL=0
+# il modello serve se fai da nodo, se scegli "locale" o se non usi la rete (e non hai un tuo server del modello)
 if [ -z "$LLM_URL" ]; then
-  if [ "$NODO" = "true" ] || [ "$NODO" = "1" ] || [ "$USA_RETE" = "false" ] || [ "$USA_RETE" = "0" ]; then NEED_MODEL=1; fi
+  if [ "$NODO" = "true" ] || [ "$NODO" = "1" ] || [ "$MODO" = "locale" ] || [ "$USA_RETE" = "false" ] || [ "$USA_RETE" = "0" ]; then NEED_MODEL=1; fi
 fi
 
 # scarica $2 in $1 (con ripresa e controllo sha256 $3, se dato)

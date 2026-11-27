@@ -1,7 +1,7 @@
 configuration:
   modo:
     name: Where to run the model
-    description: "auto = use your own model if available, otherwise the network. locale = your own model only. rete = network only."
+    description: "auto = use your own model if available, otherwise the network. locale = your own model only, everything stays at home (downloads the model, about 1 GB). rete = network only."
   usa_rete:
     name: Use the node network
     description: "If your server is slow, the answer is requested from a network node. Names, entities and texts are replaced by codes before leaving your home and restored on return."
@@ -25,7 +25,7 @@ configuration:
     description: "Connects your server straight to the node, without the relay. Both sides see each other's IP address. Leave off if unsure."
   model:
     name: Local model
-    description: "0.5b is lighter, 1.5b is more accurate. Only downloaded if your server acts as a node or you do not use the network."
+    description: "0.5b is lighter, 1.5b is more accurate. Only downloaded if your server acts as a node, you choose locale or you do not use the network."
   context:
     name: Context length
     description: "How much text the local model can read at once. Leave 2048 unless you have problems."
