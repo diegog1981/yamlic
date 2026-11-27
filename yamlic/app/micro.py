@@ -773,9 +773,10 @@ def condizione(testo, casa, avv):
         v = float(mt.group(4).replace(",", ".")); v = int(v) if v == int(v) else v
         basso = bool(re.search(r"sotto|meno|scende|al di sotto", t))
         return {"condition": "numeric_state", "entity_id": cand[0], ("below" if basso else "above"): v}
-    if re.fullmatch(r"(?:non c'e' nessuno|non c'e nessuno|la casa e' vuota|(?:noi )?siamo (?:tutti )?(?:fuori(?: casa| di casa)?|via)|non siamo (?:a|in) casa)(?: in casa| a casa)?", t):
+    if re.fullmatch(r"(?:non c'e' nessuno|non c'e nessuno|la casa e' vuota|(?:noi )?siamo (?:tutti )?(?:fuori(?: casa| di casa)?|via)|non siamo (?:a|in) casa|(?:io )?(?:non sono|non ci sono) (?:a|in) casa|(?:io )?(?:sono|resto) (?:fuori(?: casa| di casa)?|via)|(?:io )?non ci sono)(?: in casa| a casa)?", t):
+        avv.append("\"fuori casa\": uso la presenza di casa (nessuno in casa). Se intendi solo te, scrivi il tuo nome")
         return {"condition": "numeric_state", "entity_id": "zone.home", "below": 1}
-    if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' )(?: in casa| a casa)?", t):
+    if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' |(?:io )?(?:sono|ci sono) (?:a|in) casa)(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "above": 0}
     if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
