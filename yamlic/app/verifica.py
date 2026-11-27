@@ -116,7 +116,7 @@ def controlla(prompt, y, states):
     for e in sorted(set(ids)):
         if e not in known and not e.startswith(("zone.", "sun.")):
             err.append("l'entita %s non esiste" % e)
-        elif known.get(e, {}).get("state") == "unavailable" and not ((known[e].get("attributes") or {}).get("_stanza_utente") or (known[e].get("attributes") or {}).get("_funzione")):
+        elif known.get(e, {}).get("state") == "unavailable" and not e.startswith("weather.") and not ((known[e].get("attributes") or {}).get("_stanza_utente") or (known[e].get("attributes") or {}).get("_funzione")):
             err.append("l'entita %s non e disponibile, usane un'altra" % e)
     if re.search(r"temperatura", q) and not re.search(r"batter|tablet|telefono|\bcpu\b|router", q):
         for e in sorted(set(ids)):
