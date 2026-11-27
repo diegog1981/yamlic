@@ -465,9 +465,19 @@ def stato_entita(testo, casa, avv):
     return None
 
 
+def nomi_persone(t, casa):
+    """"Diego" = la persona "DiegoG" se e l'unica che inizia cosi."""
+    for w in set(re.findall(r"[a-z]{4,}", t)):
+        cand = [_n(casa.nome(s["entity_id"])).split()[0] for s in casa.states if core._dom(s["entity_id"]) == "person" and _n(casa.nome(s["entity_id"]))]
+        hit = [c for c in cand if c.startswith(w) and c != w]
+        if len(hit) == 1 and w not in cand:
+            t = re.sub(r"\b%s\b" % w, hit[0], t)
+    return t
+
+
 def evento(testo, casa, io, avv):
     """Testo dopo 'quando/appena': ritorna (trigger, condizioni) oppure None."""
-    t = testo.strip()
+    t = nomi_persone(testo.strip(), casa)
     per = None
     m = re.search(r"\b" + _PER, t)
     if m:
@@ -580,7 +590,7 @@ def evento(testo, casa, io, avv):
 
 def condizione(testo, casa, avv):
     """'la tv del soggiorno e' accesa' / 'c'e' qualcuno in casa'"""
-    t = " ".join(testo.split())
+    t = nomi_persone(" ".join(testo.split()), casa)
     if re.fullmatch(r"(?:fuori )?(?:sta )?(?:piove(?:ndo)?)(?: fuori)?", t):
         w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
         if not w:
@@ -947,7 +957,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
     if casa.domande:
         significato(p, casa)
         persone = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "person"]
-        if not io and len(persone) >= 2 and re.search(r"\b(?:esco|rientro|torno|arrivo|me ne vado)\b", p):
+        if not io and len(persone) >= 2 and re.search(r"\b(?:esco|rientro|torno|arrivo|me ne vado)\b", p) and not re.search(r"\b(?:qualcuno|tutti|nessuno|di [a-z]+o)\b", p):
             chi = (casa.risposte.get("chi:io") or {}).get("entita")
             if not chi:
                 raise Domanda("chi:io", "Chi intendi con \"io\"?", _opz(casa, persone) + [{"valore": {"entita": ["zone.home"]}, "nome": "Tutti: quando la casa resta vuota o torna qualcuno", "dettaglio": ""}])

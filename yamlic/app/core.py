@@ -1733,7 +1733,7 @@ def ibrido(y, states, prompt):
 _VUOTE = {"casa", "quando", "appena", "accendi", "spegni", "apri", "chiudi", "avvia", "ferma", "partire", "lascia", "accesa", "acceso", "spenta", "spento", "della", "delle", "degli", "dello", "nella", "nelle", "alle", "sono", "siamo", "fuori", "nessuno", "qualcuno", "notte", "giorno", "sera", "mattina", "tutte", "tutti", "dopo", "prima", "ancora", "invece", "altrimenti", "solo", "come", "avvisami"}
 _CATEGORIE = ((r"luc[ei]\b|lampad|farett|illumin|\bled\b", ("light", "switch")), (r"\btend|tapparell|serrand|garage|cancell", ("cover",)),
               (r"\btv\b|\btele\b|televis|musica|radio|volume|cassa|speaker", ("media_player",)), (r"robot|aspirapolvere", ("vacuum",)),
-              (r"ventil", ("fan",)), (r"termostat|clima|condizionat|riscaldament|gradi", ("climate",)), (r"serratur|blocca", ("lock",)), (r"annunci|\bdi'", ("assist_satellite",)))
+              (r"ventil", ("fan",)), (r"termostat|clima|condizionat|riscaldament|gradi", ("climate",)), (r"serratur|chiudi a chiave|chiave|blindat", ("lock",)), (r"annunci|\bdi'", ("assist_satellite",)))
 
 
 def _azioni_tutte(n):
@@ -1760,6 +1760,8 @@ def blocco(y, prompt, states, scelte=()):
     motivi = []
     for a in _azioni_tutte(docs):
         dom, _, nome = str(a["action"]).partition(".")
+        if dom in ("lock", "alarm_control_panel") and not re.search(r"serratur|chiave|blindat|allarme|antifurto", p):
+            motivi.append("%s non chiesto: serrature e allarme solo se li nomini" % a["action"])
         if dom not in SERVICES or not nome or (SERVICES[dom] is not None and nome not in SERVICES[dom]):
             motivi.append("comando inesistente: %s" % a["action"])
         for e in _target_ents(a):
@@ -1835,8 +1837,13 @@ def _entita_in(n):
     return out
 
 
+_SOGGETTI = r"robot|aspirapolvere|\bluc[ei]\b|lampad|farett|\btv\b|televis|tend|tapparell|lavatric|lavastovigl|asciugatric|cancell|porta|finestr|sensore"
+
+
 def pertinente(e, testo, states):
     p = " ".join(testo.lower().replace("’", "'").split())
+    if (e == "zone.home" or e.startswith("person.")) and re.search(_SOGGETTI, p):   # "il robot torna alla base" non parla di persone
+        return False
     for rx, parole in _PERT:
         if re.match(rx, e):
             return bool(re.search(parole, p))
@@ -1868,6 +1875,8 @@ def pezzo_errori(tipo, y, testo, states):
     known = {s["entity_id"] for s in states}
     ammessi = {"state", "numeric_state", "sun", "time", "zone", "time_pattern"} if tipo == "evento" else {"state", "numeric_state", "sun", "time", "zone", "or", "and", "not"}
     p = testo.lower()
+    if tipo == "evento" and len(parti) > 1 and not re.search(r"\b(?:o|oppure|ogni volta)\b", p):
+        err.append("\"%s\" e un solo evento: usa un solo trigger" % testo)
     for x in parti:
         k = x.get("trigger") if tipo == "evento" else x.get("condition")
         if k not in ammessi:

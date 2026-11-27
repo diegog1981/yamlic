@@ -270,4 +270,10 @@ def controlla(prompt, y, states):
             if re.search(r"\b(?:accendi|spegni|apri|chiudi|alza|abbassa)\w* (?:[\w']+ ){0,3}?%s\b" % re.escape(nm), q) and not set(es) & set(ids):
                 if not any(o != nm and nm in o and o in q for o in nomi):
                     err.append("manca '%s' (%s)" % (nm, es[0]))
+    tc = json.dumps(docs, ensure_ascii=False, default=str)
+    for rx, ok, cosa in ((r"\b(?:la sera|di sera|stasera|la notte|di notte|la mattina|di mattina|al mattino)\b", r"\"sun|below_horizon|above_horizon|\"after\"|\"before\"|\"at\"", "il momento della giornata"),
+                         (r"\b(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica|weekend|fine settimana|feriali|festivi)\b", r"weekday", "i giorni"),
+                         (r"\b(?:d'estate|in estate|d'inverno|in inverno|in primavera|in autunno)\b", r"month", "la stagione")):
+        if re.search(rx, p) and not re.search(ok, tc):
+            err.append("nella richiesta c'e %s (\"%s\") ma l'automazione lo ignora" % (cosa, re.search(rx, p).group(0)))
     return list(dict.fromkeys(err))

@@ -72,7 +72,7 @@ def costruisci(states):
             continue
         if f[1]:
             v["dubbi"].append(f[1])
-        if not v["stanze"] and dom not in ("person", "input_boolean") and f[0] != "cancello/portone":
+        if not v["stanze"] and dom not in ("person", "input_boolean", "vacuum") and f[0] != "cancello/portone":
             v["dubbi"].append("in quale stanza?")
         elif da_nome and da_area and not set(da_nome) & set(da_area):
             v["dubbi"].append("nome e area dicono stanze diverse")
