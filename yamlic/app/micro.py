@@ -799,6 +799,15 @@ def condizione(testo, casa, avv):
     if re.fullmatch(r"(?:le )?luci (?:sono )?(?:(?:rimaste|restate|ancora) )?accese", t):
         ids = casa.luci()
         return {"condition": "state", "entity_id": ids, "state": "on", "match": "any"} if ids else None
+    mq = re.fullmatch(r"(?:almeno |c'e' |e' )?(?:una|qualche|qualsiasi|una qualsiasi) (finestra|porta)(?: di casa)? (?:e'|resta|risulta) (?:ancora )?apert[ao]|(?:c'e' )?(?:una |qualche )?(finestra|porta) apert[ao]", t)
+    if mq:   # "una finestra e aperta" = almeno una: OR tra tutti i sensori di quel tipo
+        cl = "window" if (mq.group(1) or mq.group(2)) == "finestra" else "door"
+        ids = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "binary_sensor" and casa.classe(s_) == cl and casa.vivo(s_)]
+        if not ids:
+            _manca(casa, t, "un sensore di %s" % (mq.group(1) or mq.group(2)), "per esempio scrivi quale finestra o porta")
+            return None
+        avv.append("\"una %s aperta\": controllo tutti i sensori di questo tipo (%d)" % (mq.group(1) or mq.group(2), len(ids)))
+        return {"condition": "or", "conditions": [{"condition": "state", "entity_id": i, "state": "on"} for i in ids]} if len(ids) > 1 else {"condition": "state", "entity_id": ids[0], "state": "on"}
     pf = porta_finestra(t, casa)
     if pf:
         return {"condition": "state", "entity_id": pf[0], "state": pf[1]}

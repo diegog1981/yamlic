@@ -1811,6 +1811,7 @@ def coerente(y, prompt):
                    (r"\d+ ?(?:minut|second|or[ae])|un'ora|mezz'ora", r"\bfor:|delay|offset|time_pattern"), (r"cancell", r"cancell"),
                    (r"piov|pioggia|vento|meteo", r"weather\.|rain|pioggia"), (r"tramonto|\balba\b|\bbuio\b|\bnotte\b", r"sun|after:|before:|at:"),
                    (r"non sono (?:in|a) casa|sono fuori(?: casa)?|fuori casa|non ci sono|casa vuota|non c'e nessuno|sono via\b", r"zone\.home|person\.|device_tracker\.|group\."),
+                   (r"\b(?:finestr|port[ae]\b|garage|sportell|portone)\w*(?: \w+){0,4} (?:e'|è|sono|resta|rimane)(?: ancora)? apert", r"binary_sensor\.|cover\.|lock\."),
                    (r"una (?:sola )?volta (?:al giorno|ogni giorno|al dì|al di)|solo una volta", r"last_triggered|trigger\.")):
         if re.search(rx, p) and not re.search(ok, t):
             return False
