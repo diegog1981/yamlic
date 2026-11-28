@@ -68,6 +68,9 @@ configuration:
   grammatica:
     name: Grammar (experimental)
     description: "Forces the model to use only the listed entities and services. Off by default: needs testing."
+  regole_ai:
+    name: Extra rules for the model
+    description: "Appends the rules in regole_ai.md to the prompt (never invent entities, keep all conditions...). Turn off to compare."
 network:
   8099/tcp: Yamlic page
   8100/tcp: Relay port (only if you enable the relay role)

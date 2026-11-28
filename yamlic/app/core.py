@@ -18,6 +18,12 @@ SYSTEM = (
 def _regole_extra():
     """Regole facoltative in app/regole_ai.md: si aggiungono in coda al prompt, non lo sostituiscono (il modello e addestrato su quello base)."""
     try:
+        op = json.load(open(os.environ.get("YAMLIC_OPTIONS", "/data/options.json")))
+        if op.get("regole_ai") is False or str(os.environ.get("YAMLIC_REGOLE_AI", "")).lower() in ("0", "false", "no"):
+            return ""
+    except (OSError, ValueError):
+        pass
+    try:
         t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "regole_ai.md"), encoding="utf-8").read()
     except OSError:
         return ""
