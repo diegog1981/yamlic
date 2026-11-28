@@ -1689,6 +1689,27 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             flash = bool(re.search(r"\blampeggio\b", seg))
             if flash:
                 seg = re.sub(r"\s*\blampeggio\b", "", seg)
+            colore = None
+            if re.search(r"\b(?:luc\w*|lamp\w*|farett\w*|piantana|illuminazione)\b", seg) and not re.search(r"condizionator|clima|termostat|stuf|caldai|riscald|raffresc", seg):
+                _w = lambda m: not any(m.group(1) in _n(casa.nome(x)) for x in casa.by)   # se una luce si chiama "rossa" e il nome, non il colore
+                mk = re.search(r"\b(?:a|di|su)\s+(\d{4})\s*(?:k|kelvin)\b", seg)
+                mf = re.search(r"\b(?:bianc[oa] )?(calda|caldo|fredda|freddo|neutra|neutro)\b", seg)
+                mc = re.search(r"\b(ross[oa]|verd[ei]|blu|azzurr[oa]|giall[oa]|aranci\w*|viola|rosa|bianc[oa])\b", seg)
+                if mk:
+                    colore = {"color_temp_kelvin": int(mk.group(1))}; seg = _togli(seg, mk)
+                elif mf and _w(mf):
+                    k = {"calda": 2700, "caldo": 2700, "fredda": 6500, "freddo": 6500, "neutra": 4000, "neutro": 4000}[mf.group(1)]
+                    colore = {"color_temp_kelvin": k}; seg = _togli(seg, mf)
+                    avv.append("\"%s\": uso %d K (cambialo se vuoi una temperatura diversa)" % (mf.group(1), k))
+                elif mc and _w(mc) and not mc.group(1).startswith("bianc"):
+                    rgb = {"ross": (255, 0, 0), "verd": (0, 200, 0), "blu": (0, 0, 255), "azzu": (0, 170, 255), "gial": (255, 200, 0),
+                           "aran": (255, 120, 0), "viol": (150, 0, 255), "rosa": (255, 105, 180)}
+                    colore = {"rgb_color": list(next(v for k_, v in rgb.items() if mc.group(1).startswith(k_)))}; seg = _togli(seg, mc)
+                elif mc and _w(mc):
+                    colore = {"color_temp_kelvin": 4000}; seg = _togli(seg, mc)
+                    avv.append("\"bianco\": uso 4000 K (neutro)")
+                if colore:
+                    seg = re.sub(r"\b(?:metti|imposta|cambia|porta)\b", "accendi", seg)
             mv = re.search(r"\b(%s)\b" % _V, seg)
             if mv:
                 parola = mv.group(1)
@@ -1795,6 +1816,15 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                         if d != "light":
                             return None
                         a["data"] = {"flash": "long"}
+                    if colore:
+                        if d != "light" or srv != "turn_on":
+                            return None
+                        for e_ in es:
+                            md_ = (casa.by[e_].get("attributes") or {}).get("supported_color_modes")
+                            if md_ is not None and not (set(md_) & ({"hs", "xy", "rgb", "rgbw", "rgbww"} if "rgb_color" in colore else {"color_temp", "hs", "xy", "rgb", "rgbw", "rgbww"})):
+                                avv.append("%s non supporta %s" % (casa.nome(e_), "il colore" if "rgb_color" in colore else "la temperatura colore"))
+                                return None
+                        a["data"] = dict(a.get("data") or {}, **colore)
                     if lum is not None and d == "cover" and ((srv == "close_cover" and lum >= 100) or (srv == "open_cover" and lum <= 0)):
                         return None   # "chiudi al 100%": ambiguo (100 in HA = aperta), meglio chiedere
                     if lum is not None and d == "cover" and 0 <= lum <= 100:   # "chiudi le tapparelle al 30%" = posizione 30
@@ -1804,7 +1834,7 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                         if d != "light" or srv != "turn_on":
                             avv.append("luminosita %d%% non applicabile a %s (e un interruttore)" % (lum, ", ".join(casa.nome(e) for e in es)))
                         else:
-                            a["data"] = {"brightness_pct": lum}
+                            a["data"] = dict(a.get("data") or {}, brightness_pct=lum)
                     azioni.append(a)
         if eccez is not None:
             return None
