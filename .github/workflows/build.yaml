@@ -7,18 +7,19 @@ on:
 permissions:
   contents: read
   packages: write
+env:
+  IMG: ghcr.io/diegog1981/yamlic
 jobs:
-  build:
+  amd64:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        addon: [yamlic]
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - name: Leggi versione
         id: v
         run: |
-          V=$(grep '^version:' ${{ matrix.addon }}/config.yaml | sed 's/version: *//' | tr -d '"')
+          V=$(grep '^version:' yamlic/config.yaml | sed 's/version: *//' | tr -d '"')
           echo "version=$V" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
@@ -27,8 +28,50 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.addon }}
+          context: yamlic
+          platforms: linux/amd64
+          provenance: false
           push: true
-          tags: |
-            ghcr.io/diegog1981/${{ matrix.addon }}:${{ steps.v.outputs.version }}
-            ghcr.io/diegog1981/${{ matrix.addon }}:latest
+          tags: ${{ env.IMG }}:${{ steps.v.outputs.version }}-amd64
+
+  # Raspberry / ARM a 64 bit: se questo job fallisce, l'immagine amd64 esce lo stesso
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Leggi versione
+        id: v
+        run: |
+          V=$(grep '^version:' yamlic/config.yaml | sed 's/version: *//' | tr -d '"')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: yamlic
+          platforms: linux/arm64
+          provenance: false
+          push: true
+          tags: ${{ env.IMG }}:${{ steps.v.outputs.version }}-arm64
+
+  manifest:
+    needs: [amd64, arm64]
+    if: ${{ always() && needs.amd64.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Immagine unica (amd64 + arm64 se c'e)
+        run: |
+          V=${{ needs.amd64.outputs.version }}
+          SRC="$IMG:$V-amd64"
+          if [ "${{ needs.arm64.result }}" = "success" ]; then SRC="$SRC $IMG:$V-arm64"; fi
+          docker buildx imagetools create -t $IMG:$V -t $IMG:latest $SRC
