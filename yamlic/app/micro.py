@@ -726,7 +726,9 @@ def evento(testo, casa, io, avv):
             return None
         v = m.groupdict().get("st") or m.group("v")
         stato = "on" if v.startswith("acc") else "off" if v.startswith(("spe", "spegn")) else "open" if v.startswith("ap") else "closed"
-        if core._dom(eid) != "cover":
+        if core._dom(eid) == "lock":   # le serrature sono locked/unlocked, mai on/off
+            stato = {"open": "unlocked", "closed": "locked"}.get(stato, stato)
+        elif core._dom(eid) != "cover":
             stato = {"open": "on", "closed": "off"}.get(stato, stato)
         if core._dom(eid) == "media_player" and stato in ("on", "off"):   # un media player acceso puo essere playing, idle, paused
             return fine({"trigger": "state", "entity_id": eid, **({"from": ["off", "standby"]} if stato == "on" else {"to": ["off", "standby"]})})
@@ -783,9 +785,9 @@ def condizione(testo, casa, avv):
     if re.fullmatch(r"(?:c'e' |c'e |e' |e )?(?:poca|scarsa) luce(?: naturale)?|(?:fa |e' )?(?:quasi )?buio pesto", t):
         avv.append("\"poca luce\": uso il buio (sole sotto l'orizzonte), non un sensore di luminosita. Se vuoi una soglia, scrivi per esempio \"la luminosita cucina scende sotto 100\"")
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
-    if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte", t):
+    if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte|(?:solo |soltanto )?(?:di|durante la) notte", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
-    if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)", t):
+    if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)|(?:solo |soltanto )?(?:di|durante il) giorno", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"}
     for s_ in casa.states:
         if core._dom(s_["entity_id"]) == "person":
@@ -816,7 +818,9 @@ def condizione(testo, casa, avv):
     if m.groupdict().get("non"):   # "non e accesa" = spenta, "non e aperta" = chiusa
         stato = {"on": "off", "off": "on", "open": "closed", "closed": "open"}[stato]
     dom_ = core._dom(eid[0] if isinstance(eid, list) else eid)
-    if dom_ != "cover":
+    if dom_ == "lock":
+        stato = {"open": "unlocked", "closed": "locked"}.get(stato, stato)
+    elif dom_ != "cover":
         stato = {"open": "on", "closed": "off"}.get(stato, stato)
     c = {"condition": "state", "entity_id": eid, "state": stato}
     if isinstance(eid, list):
@@ -995,6 +999,12 @@ def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     # "quando arrivo a casa e fa buio" = evento + condizione (non due eventi)
     p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
+    p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante la) notte\s*$", ", ma solo se e' buio", p)
+    p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante il) giorno\s*$", ", ma solo se e' giorno", p)
+    p = re.sub(r"\b(resta|rimane|restano|e') sbloccat([ao])\b", r"\1 apert\2", p)
+    p = re.sub(r"\bsi sblocca\b", "si apre", p)   # serratura sbloccata = serratura aperta (stato unlocked)
+    p = re.sub(r"^(.+?) (\d+ (?:second\w|minut\w|or[ae])) dopo che (?:il movimento (?:e' )?(?:finito|finisce|cessa|smette)|non c'e' piu movimento)((?: (?:in|nel|nella|nell'|all'|al|alla) [^,]+?)?)((?:,? (?:ma )?solo .+)?)$",
+               lambda m: "quando non c'e' piu movimento%s da %s, %s%s" % (m.group(3), m.group(2), m.group(1), m.group(4)), p)   # "spegni X 7 minuti dopo che il movimento e finito"
     p = re.sub(r"\b((?:quando|appena|se) [^,]+?) (?:e|ed) ((?:il|lo|la|l'|le|i|gli) [^,]+? (?:e'|e) (?:ancora |gia )?(?:acces|spent|apert|chius)[aoei])\b,? (?=(?:%s)\b)" % _V, r"\1, ma solo se \2, ", p)   # "quando X e la luce e accesa spegni Y": la seconda parte e una condizione
     p = re.sub(r"^se (torno|arrivo|rientro|esco|torna|arriva|rientra|esce)\b", r"quando \1", p)
     p = ore_lettere(p)
