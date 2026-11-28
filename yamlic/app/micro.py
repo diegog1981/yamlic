@@ -778,6 +778,9 @@ def condizione(testo, casa, avv):
         return {"condition": "numeric_state", "entity_id": "zone.home", "below": 1}
     if re.fullmatch(r"(?:c'e' qualcuno|c'e qualcuno|qualcuno e' |(?:io )?(?:sono|ci sono) (?:a|in) casa)(?: in casa| a casa)?", t):
         return {"condition": "numeric_state", "entity_id": "zone.home", "above": 0}
+    if re.fullmatch(r"(?:c'e' |c'e |e' |e )?(?:poca|scarsa) luce(?: naturale)?|(?:fa |e' )?(?:quasi )?buio pesto", t):
+        avv.append("\"poca luce\": uso il buio (sole sotto l'orizzonte), non un sensore di luminosita. Se vuoi una soglia, scrivi per esempio \"la luminosita cucina scende sotto 100\"")
+        return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)", t):
