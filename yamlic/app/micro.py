@@ -1762,12 +1762,16 @@ def _costruisci(prompt, casa, notify, io, chiedi):
 def _testo_evento(tr, casa, originale):
     t = tr[0] if tr else {}
     e = t.get("entity_id", "")
-    if "lavatrice" in e or "lavastoviglie" in e or "asciugatrice" in e:
+    if t.get("trigger") == "numeric_state" and ("lavatrice" in e or "lavastoviglie" in e or "asciugatrice" in e):
         return "%s: ciclo finito" % casa.nome(e).rsplit(" ", 1)[0]
     if e == "zone.home":
         return "Casa vuota" if "below" in t else "Qualcuno e tornato a casa"
     if t.get("trigger") == "state" and isinstance(t.get("to"), str) and t.get("for"):
         d = t["for"]
+        n = casa.nome(e)
+        if t["to"] in ("on", "off") and re.search(r"\b(porta|finestra|garage|sportello|cancello|portone|basculante)\b", n.lower()):
+            return "%s %s da %s" % (n, ("aperta" if re.search(r"\b(porta|finestra)\b", n.lower()) else "aperto") if t["to"] == "on" else ("chiusa" if re.search(r"\b(porta|finestra)\b", n.lower()) else "chiuso"),
+                                  " ".join("%s %s" % (v, {"minutes": "minuti", "seconds": "secondi", "hours": "ore"}[k]) for k, v in d.items()))
         return "%s: %s da %s" % (casa.nome(e), {"on": "stato acceso", "off": "stato spento", "open": "stato aperto", "closed": "stato chiuso"}.get(t["to"], t["to"]),
                                " ".join("%s %s" % (v, {"minutes": "minuti", "seconds": "secondi", "hours": "ore"}[k]) for k, v in d.items()))
     return "Yamlic: " + originale[:100]
