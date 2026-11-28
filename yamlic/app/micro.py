@@ -1010,6 +1010,12 @@ def parlato(p):
     p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante la) notte\s*$", ", ma solo se e' buio", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante il) giorno\s*$", ", ma solo se e' giorno", p)
+    _vv = {"apro": "si apre", "riapro": "si apre", "chiudo": "si chiude", "richiudo": "si chiude", "accendo": "si accende", "spengo": "si spegne"}
+    mo = re.search(r"\b(?:quando|appena|se) (?:io )?(apro|chiudo|richiudo|riapro|accendo|spengo) ((?:il|lo|la|l'|le|i|gli) ?[^,]+?)(?=,| (?:%s)\b| e quando\b|$)" % _V, p)
+    if mo:   # "quando apro la porta" = "quando la porta si apre"; "quando la richiudo" = la stessa cosa
+        ogg = mo.group(2)
+        p = p[:mo.start(1)] + ogg + " " + _vv[mo.group(1)] + p[mo.end():]
+        p = re.sub(r"\b(quando|appena|se) (?:la|lo|le|li|l') ?(apro|chiudo|richiudo|riapro|accendo|spengo)\b", lambda m: "%s %s %s" % (m.group(1), ogg, _vv[m.group(2)]), p)
     p = re.sub(r"\b(resta|rimane|restano|e') sbloccat([ao])\b", r"\1 apert\2", p)
     p = re.sub(r"\bsi sblocca\b", "si apre", p)   # serratura sbloccata = serratura aperta (stato unlocked)
     p = re.sub(r"^(.+?) (\d+ (?:second\w|minut\w|or[ae])) dopo che (?:il movimento (?:e' )?(?:finito|finisce|cessa|smette)|non c'e' piu movimento)((?: (?:in|nel|nella|nell'|all'|al|alla) [^,]+?)?)((?:,? (?:ma )?solo .+)?)$",
