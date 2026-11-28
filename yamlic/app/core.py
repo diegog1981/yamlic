@@ -1814,6 +1814,16 @@ def coerente(y, prompt):
             return False
     if "zone.home" in t and not re.search(r"nessuno|qualcuno|tutti|casa|\besco|escono|torn|rientr|arriv|via\b|vacanza|presenza", p):
         return False
+    if "zone.home" in t:
+        neg = re.search(r"nessuno|vuota|fuori casa|non sono (?:in|a) casa|non ci sono|non c'e'? nessuno|sono fuori|sono via|\besc|escono", p)
+        if re.search(r"zone\.home\n\s+below: [2-9]", t) and not neg:
+            return False   # "qualcuno in casa" non e below
+        if re.search(r"zone\.home\n\s+above: 0", t) and neg and not re.search(r"\btorn|rientr|arriv", p):
+            return False
+        if re.search(r"\bpassa|passaggio|si muove|rilev\w* movimento|c'e movimento|c'e' movimento", p) and not re.search(r"\bcasa\b|nessuno in|esco|torn|rientr|arriv", p):
+            return False   # un passaggio non e la presenza di casa
+    if re.search(r"poca luce|scarsa luce|poca luminosita|troppo buio|\bluminosita\b", p) and not re.search(r"illuminance|lux|luminosit|sun\.|sun\b|after:|before:", t):
+        return False
     if re.search(r"robot|aspirapolvere", p) and re.search(r"finit|fermat|bloccat", p) and not re.search(r"trigger: state\n\s*entity_id: vacuum", t):
         return False
     return True
