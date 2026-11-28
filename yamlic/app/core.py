@@ -1044,7 +1044,9 @@ def validate(y, known, prompt="", remote=False):
                     p.append("azione sensibile (%s) non richiesta: bloccata" % svc)
                 if remote and re.search(r"https?://", json.dumps(a.get("data", {}))):
                     p.append("link nel messaggio: bloccato")
-            elif not ({"delay", "wait_for_trigger", "if", "choose"} & set(a)):
+            elif "repeat" in a and isinstance(a["repeat"], dict):
+                check_actions(a["repeat"].get("sequence") or [])
+            elif not ({"delay", "wait_for_trigger", "wait_template", "if", "choose", "parallel", "sequence"} & set(a)):
                 p.append("azione senza 'action'")
     check_actions(acts if isinstance(acts, list) else [])
     for c in cfg.get("conditions") or []:

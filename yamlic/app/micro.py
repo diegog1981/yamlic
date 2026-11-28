@@ -1307,12 +1307,15 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, dom
     casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
     casa.chiedi_pezzo = pezzo
     rep = re.search(r"\s*,?\s*(?:e\s+)?(?:(?:ripetilo|ripetila|ripeti(?: l'avviso| la notifica)?)\s+)?ogni\s+(\d+)\s+(minut\w+|or[ae])\s+finch[eé]\s+non\s+(.+?)\s*[.!]*$", prompt.strip(), re.I)
+    prompt_intero = prompt
     if rep:
         prompt = prompt.strip()[:rep.start()]
     try:
         r = presenza(prompt, casa) or scena(prompt, casa, notify, io, chiedi) or _costruisci(prompt, casa, notify, io, chiedi)
         if r and r.get("yaml") and rep:
             r = _ripeti(r, rep, casa, io)
+            if r:
+                r["frase"] = prompt_intero.strip()
     except Domanda as d:
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
