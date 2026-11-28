@@ -145,7 +145,7 @@ DOMAINS = {"luc": "light", "lamp": "light", "tappar": "cover", "serrand": "cover
 LIGHT_LIKE = re.compile(r"luc|led|farett|barra|lampad|striscia|plafon|abat|veletta|applique")
 FIRST = re.compile(r"\b(io|mio|mia|miei|mie|me)\b")
 # entita che non sono luci vere: opzioni, indicatori, schermi
-NOT_LIGHT = re.compile(r"stuf|forno|bollitor|caffe|frigo|router|stampant|televis|cancell|lavatric|lavastovigli|pompa|boiler|caldai|irrig|garage|portone|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare|timer|countdown|\\bring\\b|wake|satellite|assist")
+NOT_LIGHT = re.compile(r"stuf|forno|bollitor|caffe|frigo|router|stampant|televis|(?<!light\.)(?<!luci )(?<!luce )(?<!luci del )(?<!luce del )(?:cancell|garage|portone)|lavatric|lavastovigli|pompa|boiler|caldai|irrig|ventol|asciug|clima|update|enabled|status.?ring|indicator|night.?mode|display|schermo|screen|backlight|reset|restart|identify|mute|sound|amplifier|internet|debug|kiosk|manutenzione|disturbare|timer|countdown|\\bring\\b|wake|satellite|assist")
 ROOMS = [{"soggiorno", "salotto", "living", "salone"}, {"cucina"}, {"bagno"}, {"camera", "letto"}, {"giardino", "esterno", "esterni"}]
 
 def room_words(w):

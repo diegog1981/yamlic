@@ -10,7 +10,7 @@ import core
 GIORNI_IT = {"lunedi": "mon", "martedi": "tue", "mercoledi": "wed", "giovedi": "thu", "venerdi": "fri", "sabato": "sat", "domenica": "sun"}
 FERIALI, WEEKEND = ["mon", "tue", "wed", "thu", "fri"], ["sat", "sun"]
 STANZE = ("soggiorno", "salotto", "salone", "living", "cucina", "bagno", "cameretta", "camera", "giardino", "esterno", "ingresso",
-          "corridoio", "studio", "mansarda", "taverna", "lavanderia", "terrazzo", "balcone", "garage", "cantina", "ufficio", "veranda", "isola", "tavolo")
+          "corridoio", "studio", "mansarda", "taverna", "lavanderia", "terrazzo", "balcone", "garage", "cantina", "ufficio", "veranda", "isola", "tavolo", "scale", "scala")
 VERBI = {"accend": "turn_on", "riaccend": "turn_on", "spegn": "turn_off", "apr": "open_cover", "riapr": "open_cover", "alz": "open_cover",
          "chiud": "close_cover", "richiud": "close_cover", "abbass": "close_cover",
          "avvia": "start", "riavvia": "start", "ferma": "stop", "blocca": "lock", "sblocca": "unlock"}
@@ -1042,6 +1042,7 @@ def parlato(p):
     p = re.sub(r"\b((?:quando|appena|se) [^,]+?) (?:e|ed) ((?:non c'e'|non c'\u00e8) nessuno(?: in| a) casa|la casa (?:e'|\u00e8) vuota)(?=,| (?:%s|avvisami|avvertimi|notificami|mandami|inviami)\b|$)" % _V, r"\1, ma solo se \2", p)
     _nw = dict(_NUMW, quindici=15, venti=20, trenta=30, quaranta=40, cinquanta=50, sessanta=60)
     p = re.sub(r"\b(%s|un) (second[oi]|minut[oi]|ore|ora)\b" % "|".join(_nw), lambda m: "%d %s" % (1 if m.group(1) == "un" else _nw[m.group(1)], m.group(2)), p)   # "cinque minuti" = 5 minuti
+    p = re.sub(r"\b(luci|faretti|tende|tapparelle|serrande|lampade)((?: (?:di|del|dello|della|dell'|in|nel|nella) ?\w+)+) e (?:quelle|quelli) ((?:di|del|dello|della|delle|dell'|in|nel|nella) ?\w+)", r"\1\2 e \1 \3", p)   # "le luci del garage e quelle delle scale"
     p = re.sub(r"\b(?:fai |far |fa' )?lampegg\w+", "accendi lampeggio", p)   # "fai lampeggiare le luci" = accendi con flash
     p = re.sub(r"\b(resta|rimane|restano|rimangono) (apert\w|acces\w|chius\w|spent\w) (\d+ (?:second|minut|or[ae]))", r"\1 \2 per \3", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante la) notte\s*$", ", ma solo se e' buio", p)
@@ -1118,7 +1119,7 @@ def parlato(p):
     p = " ".join(p.split())
     # "le tende di cucina e soggiorno" -> una frase completa per stanza
     r_ = "|".join(STANZE)
-    prep = r"(?:(?:di|del|dello|della|dell'|in|nel|nella|nell') ?)"
+    prep = r"(?:(?:di|del|dello|della|delle|dei|dell'|in|nel|nella|nell') ?)"
     rx = r"\b(tende|tapparelle|serrande|luci|faretti)( %s(?:%s))(?:,| e) (%s)?(?=(?:%s)\b)" % (prep, r_, prep, r_)
     prima = None
     while prima != p:
