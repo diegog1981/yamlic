@@ -1383,6 +1383,8 @@ def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, dom
     if rep:
         prompt = prompt.strip()[:rep.start()]
     try:
+        if re.search(r"\bprima (?:che (?:mi )?svegli\w*|della sveglia|di svegliarmi|che suoni la sveglia)", prompt, re.I):
+            raise Domanda("riscrivi:sveglia", "Non so a che ora ti svegli e non posso saperlo prima. Riscrivi la frase con l'orario gia calcolato, per esempio: se ti svegli alle 7 e vuoi la stufa un'ora prima, \"alle 6 accendi la stufa\".", riscrivi=True)
         r = presenza(prompt, casa) or scena(prompt, casa, notify, io, chiedi) or _costruisci(prompt, casa, notify, io, chiedi)
         if r and r.get("yaml") and rep:
             r = _ripeti(r, rep, casa, io)
