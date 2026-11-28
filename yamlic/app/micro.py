@@ -514,12 +514,14 @@ def binario(casa, classi, dove):
 
 def porta_finestra(t, casa):
     """'si apre la finestra della cucina', 'la porta d'ingresso resta aperta' -> (sensore, 'on'/'off')."""
-    cosa = r"(?:la |il |una )?(?P<c>porta|finestra|portafinestra)(?P<d>(?: (?:d'|di |del |della |dell'|in |nel )?\s*\w+)?)"
+    cosa = r"(?:la |il |lo |una )?(?P<c>porta|finestra|portafinestra|sportello)(?P<d>(?: (?:d'|di |del |della |dell'|in |nel )?\s*\w+)?)"
     for pat in (r"(?:si (?P<v>apre|chiude)|viene (?P<w>aperta|chiusa)) " + cosa, cosa + r" (?:si (?P<v>apre|chiude)|(?P<non>non )?(?:viene|resta|rimane|e'|e) (?P<w>aperta|chiusa))"):
         m = re.fullmatch(pat, t)
         if m:
-            classi = ("door", "opening") if m.group("c") == "porta" else ("window", "opening")
+            classi = ("door", "opening") if m.group("c") in ("porta", "sportello") else ("window", "opening")
             dove = re.sub(r"^(?:\s*(?:d'|di |del |della |dell'|in |nel ))", "", m.group("d").strip() + " ").strip()
+            if m.group("c") == "sportello":
+                dove = ("sportello " + dove).strip()
             e = binario(casa, classi, dove)
             v = m.group("v") or m.group("w")
             aperta = v.startswith("apr") or v.startswith("aper")
@@ -932,6 +934,22 @@ def tempi(seg):
     m = re.search(r"\b(?:ogni|il|la|solo il|solo la|di)\s+(%s)\b" % "|".join(GIORNI_IT), seg)
     if m and not giorni:
         giorni, seg = [GIORNI_IT[m.group(1)]], _togli(seg, m)
+    # "dopo le 23 e prima dell'alba" / "dopo il tramonto e prima delle 6": la fascia attraversa la mezzanotte = OR, mai AND
+    ta = [c for c in cond if c.get("condition") == "time" and "after" in c and "before" not in c and int(str(c["after"])[:2]) >= 12]
+    sb = [c for c in cond if c.get("condition") == "sun" and c.get("before") == "sunrise" and "after" not in c]
+    sa = [c for c in cond if c.get("condition") == "sun" and c.get("after") == "sunset" and "before" not in c]
+    tb = [c for c in cond if c.get("condition") == "time" and "before" in c and "after" not in c and int(str(c["before"])[:2]) <= 12]
+    t1 = [c for c in cond if c.get("condition") == "time" and "after" in c and "before" not in c]
+    t2 = [c for c in cond if c.get("condition") == "time" and "before" in c and "after" not in c]
+    if t1 and t2:   # "dopo le 18 e prima delle 22" (anche a cavallo di mezzanotte: HA lo gestisce)
+        cond = [c for c in cond if c is not t1[0] and c is not t2[0]] + [{"condition": "time", "after": t1[0]["after"], "before": t2[0]["before"]}]
+        seg = re.sub(r"\s+e\s+(?=(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|metti|imposta|manda|avvisa)\w*)", " ", seg, count=1)
+        ta = tb = []
+    for x, y_ in ((ta, sb), (sa, tb)):
+        if x and y_:
+            cond = [c for c in cond if c is not x[0] and c is not y_[0]] + [{"condition": "or", "conditions": [x[0], y_[0]]}]
+            seg = re.sub(r"\s+e\s+(?=(?:accendi|spegni|apri|chiudi|alza|abbassa|avvia|ferma|metti|imposta|manda|avvisa)\w*)", " ", seg, count=1)
+            break
     return tr, cond, giorni, seg
 
 
@@ -973,6 +991,7 @@ def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     # "quando arrivo a casa e fa buio" = evento + condizione (non due eventi)
     p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
+    p = re.sub(r"^se (torno|arrivo|rientro|esco|torna|arriva|rientra|esce)\b", r"quando \1", p)
     p = ore_lettere(p)
     p = re.sub(r"^(?:dai|ecco|allora|ok|senti|scusa|ciao|buongiorno|buonasera|per favore|per piacere|ti prego)\b[, ]*", "", p)
     p = re.sub(r"\b(?:tipo|diciamo|praticamente|cioe'?|magari|per favore|per piacere|per cortesia|ti prego|grazie(?: mille)?|mi raccomando|eh|insomma|quindi|ovviamente|semplicemente)\b,?", " ", p)
@@ -1248,13 +1267,52 @@ def presenza(prompt, casa):
     return {"yaml": yaml.dump(cfg, Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=1000).rstrip("\n"), "avvisi": avv, "modello": 0, "frase": prompt, "fisso": True}
 
 
+_OPPOSTO = {"on": "off", "off": "on", "open": "closed", "closed": "open", "opening": "closed", "unlocked": "locked", "locked": "unlocked", "home": "not_home", "not_home": "home"}
+
+
+def _ripeti(r, rep, casa, io):
+    """"... ripetila ogni 5 minuti finche non la chiudo": azioni dentro un repeat/until con delay. Se non capisco la fine, niente (mai ignorarla)."""
+    n, unita, fine = int(rep.group(1)), rep.group(2).lower(), _n(rep.group(3)).strip()
+    cfg = yaml.safe_load(r["yaml"])
+    trs = [t for t in cfg.get("triggers", []) if t.get("trigger") == "state" and t.get("entity_id")]
+    ent = stato = None
+    m1 = re.fullmatch(r"(?:la|lo|l')\s*(chiudo|apro|spengo|accendo)", fine)
+    if m1 and len(trs) >= 1:
+        ent = trs[0]["entity_id"]; to = trs[0].get("to")
+        to = to[0] if isinstance(to, list) and to else to
+        stato = _OPPOSTO.get(str(to))
+    else:
+        m2 = re.fullmatch(r"(apro|chiudo|accendo|spengo) (.+)", fine)
+        if m2:
+            verbo = {"apro": "si apre", "chiudo": "si chiude", "accendo": "si accende", "spengo": "si spegne"}[m2.group(1)]
+            ev = evento("%s %s" % (verbo, m2.group(2)), casa, io, [])
+            if ev:
+                tr_ = ev[0][0] if isinstance(ev[0], list) else ev[0]
+                if tr_.get("trigger") == "state" and tr_.get("entity_id"):
+                    ent = tr_["entity_id"]; to = tr_.get("to")
+                    stato = to[0] if isinstance(to, list) and to else to
+    if not ent or not stato:
+        return None
+    az = list(cfg["actions"])
+    ore = unita.startswith("or")
+    cfg["actions"] = [{"repeat": {"sequence": az + [{"delay": {"hours" if ore else "minutes": n}}], "until": [{"condition": "state", "entity_id": ent, "state": str(stato)}]}}]
+    r["yaml"] = yaml.dump(cfg, Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=1000).rstrip("\n")
+    r["avvisi"] = list(r.get("avvisi", [])) + ["ripeto ogni %d %s finche %s diventa %s; se riavvii Home Assistant il ciclo si interrompe" % (n, "ore" if ore else "minuti", casa.nome(ent), stato)]
+    return r
+
+
 def costruisci(prompt, states, notify=(), io="", chiedi=None, risposte=None, domande=False, memoria=None, pezzo=None):
     """Come _costruisci; con domande=True un pezzo dubbio diventa {"domanda": ...} invece di None."""
     casa = Casa(states)
     casa.risposte, casa.domande, casa.memoria = dict(risposte or {}), domande, dict(memoria or {})
     casa.chiedi_pezzo = pezzo
+    rep = re.search(r"\s*,?\s*(?:e\s+)?(?:(?:ripetilo|ripetila|ripeti(?: l'avviso| la notifica)?)\s+)?ogni\s+(\d+)\s+(minut\w+|or[ae])\s+finch[eé]\s+non\s+(.+?)\s*[.!]*$", prompt.strip(), re.I)
+    if rep:
+        prompt = prompt.strip()[:rep.start()]
     try:
         r = presenza(prompt, casa) or scena(prompt, casa, notify, io, chiedi) or _costruisci(prompt, casa, notify, io, chiedi)
+        if r and r.get("yaml") and rep:
+            r = _ripeti(r, rep, casa, io)
     except Domanda as d:
         return {"domanda": d.d}
     if r is None and domande and casa.pezzo:
