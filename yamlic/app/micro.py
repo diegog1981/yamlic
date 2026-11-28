@@ -1017,6 +1017,7 @@ def parlato(p):
         p = p[:mo.start(1)] + ogg + " " + _vv[mo.group(1)] + p[mo.end():]
         p = re.sub(r"\b(quando|appena|se) (?:la|lo|le|li|l') ?(apro|chiudo|richiudo|riapro|accendo|spengo)\b", lambda m: "%s %s %s" % (m.group(1), ogg, _vv[m.group(2)]), p)
     p = re.sub(r"\b(?:abbassa|riduci|alza|aumenta|porta|regola)(?:re)? (le luci|la luce|i faretti|le lampade|la lampada|l'illuminazione)(?= .*?\bal \d+ ?(?:%|per ?cento))", r"imposta \1", p)   # "abbassa le luci al 30%" = imposta al 30%
+    p = re.sub(r"\b((?:apri|chiudi|abbassa|alza|metti|porta)\b[^,]*?\b(?:tapparell|tend|serrand|veneziane)\w*[^,]*?) a meta\b", r"\1 al 50%", p)   # "apri le tapparelle a meta" = posizione 50
     p = re.sub(r"\b(resta|rimane|restano|e') sbloccat([ao])\b", r"\1 apert\2", p)
     p = re.sub(r"\bsi sblocca\b", "si apre", p)   # serratura sbloccata = serratura aperta (stato unlocked)
     p = re.sub(r"^(.+?) (\d+ (?:second\w|minut\w|or[ae])) dopo che (?:il movimento (?:e' )?(?:finito|finisce|cessa|smette)|non c'e' piu movimento)((?: (?:in|nel|nella|nell'|all'|al|alla) [^,]+?)?)((?:,? (?:ma )?solo .+)?)$",
@@ -1725,7 +1726,12 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                     else:
                         return None
                     a = {"action": "%s.%s" % (d, srv), "target": {"entity_id": es[0] if len(es) == 1 else es}}
-                    if lum is not None:
+                    if lum is not None and d == "cover" and ((srv == "close_cover" and lum >= 100) or (srv == "open_cover" and lum <= 0)):
+                        return None   # "chiudi al 100%": ambiguo (100 in HA = aperta), meglio chiedere
+                    if lum is not None and d == "cover" and 0 <= lum <= 100:   # "chiudi le tapparelle al 30%" = posizione 30
+                        a = {"action": "cover.set_cover_position", "target": a["target"], "data": {"position": lum}}
+                        avv.append("tapparelle/tende al %d%%: e la posizione (0 = chiusa, 100 = aperta)" % lum)
+                    elif lum is not None:
                         if d != "light" or srv != "turn_on":
                             avv.append("luminosita %d%% non applicabile a %s (e un interruttore)" % (lum, ", ".join(casa.nome(e) for e in es)))
                         else:
