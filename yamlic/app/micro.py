@@ -785,6 +785,35 @@ def condizione(testo, casa, avv):
     if re.fullmatch(r"(?:c'e' |c'e |e' |e )?(?:poca|scarsa) luce(?: naturale)?|(?:fa |e' )?(?:quasi )?buio pesto", t):
         avv.append("\"poca luce\": uso il buio (sole sotto l'orizzonte), non un sensore di luminosita. Se vuoi una soglia, scrivi per esempio \"la luminosita cucina scende sotto 100\"")
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
+    ma_ = re.fullmatch(r"(?:il |l')?(?:allarme|antifurto) (non )?(?:e'|e) (?:ancora )?(?:su |in )?(away|fuori(?: casa)?|inserito|attivo|attivato|armato|disinserito|disattivato|spento|a casa|home|night|notte)", t)
+    if ma_:
+        al = [s_["entity_id"] for s_ in casa.states if core._dom(s_["entity_id"]) == "alarm_control_panel"]
+        if len(al) != 1:
+            if not al:
+                _manca(casa, t, "un allarme (alarm_control_panel)", "per esempio usa la presenza di una persona")
+            return None
+        w = ma_.group(2)
+        stati = {"away": ["armed_away"], "fuori": ["armed_away"], "a casa": ["armed_home"], "home": ["armed_home"], "night": ["armed_night"], "notte": ["armed_night"]}
+        if w.startswith("fuori"):
+            st_ = ["armed_away"]
+        elif w in stati:
+            st_ = stati[w]
+        elif w.startswith("dis") or w == "spento":
+            st_ = ["disarmed"]
+        else:
+            st_ = ["armed_away", "armed_home", "armed_night"]
+        c_ = {"condition": "state", "entity_id": al[0], "state": st_ if len(st_) > 1 else st_[0]}
+        return {"condition": "not", "conditions": [c_]} if ma_.group(1) else c_
+    if re.fullmatch(r"(?:la |il |l')?(?:stanza|camera|cameretta|soggiorno|salotto|cucina|bagno|studio|ufficio|garage|ingresso|corridoio|taverna|mansarda)?(?: \w+)? ?(?:e'|e) (?:buia|buio|scura|scuro|poco illuminata)", t) and t not in ("e' buio", "e buio"):
+        lx = [s_ for s_ in casa.states if core._dom(s_["entity_id"]) == "sensor" and casa.vivo(s_) and casa.classe(s_) == "illuminance"]
+        parole = [w for w in re.findall(r"\w+", t) if w in STANZE]
+        if parole:
+            lx = [s_ for s_ in lx if parole[0] in casa.testo(s_)] or lx
+        if len(lx) == 1:
+            avv.append("\"buia\": sensore %s sotto 50 lx (cambia la soglia se serve)" % casa.nome(lx[0]["entity_id"]))
+            return {"condition": "numeric_state", "entity_id": lx[0]["entity_id"], "below": 50}
+        avv.append("\"buia\": non ho un solo sensore di luminosita, uso il buio (sole sotto l'orizzonte)")
+        return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |fa )?(?:gia |ancora )?buio|e' notte|(?:solo |soltanto )?(?:di|durante la) notte", t):
         return {"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}
     if re.fullmatch(r"(?:e' |e |c'e' )?(?:ancora )?(?:giorno|chiaro|luce)|(?:solo |soltanto )?(?:di|durante il) giorno", t):
@@ -1008,6 +1037,13 @@ def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     # "quando arrivo a casa e fa buio" = evento + condizione (non due eventi)
     p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
+    p = re.sub(r"\b(?:tra|fra) le (\d{1,2}(?:[:.]\d{2})?) e le (\d{1,2}(?:[:.]\d{2})?)", r"dalle \1 alle \2", p)
+    p = re.sub(r"\b((?:quando|appena|se) [^,]+?) (?:e|ed) ((?:il|l')(?:'?allarme|antifurto) (?:non )?(?:e'|\u00e8|e) (?:ancora )?(?:su |in )?[\w ]+?)\b,? (?=(?:%s)\b)" % _V, r"\1, ma solo se \2, ", p)
+    p = re.sub(r"\b((?:quando|appena|se) [^,]+?) (?:e|ed) ((?:non c'e'|non c'\u00e8) nessuno(?: in| a) casa|la casa (?:e'|\u00e8) vuota)(?=,| (?:%s|avvisami|avvertimi|notificami|mandami|inviami)\b|$)" % _V, r"\1, ma solo se \2", p)
+    _nw = dict(_NUMW, quindici=15, venti=20, trenta=30, quaranta=40, cinquanta=50, sessanta=60)
+    p = re.sub(r"\b(%s|un) (second[oi]|minut[oi]|ore|ora)\b" % "|".join(_nw), lambda m: "%d %s" % (1 if m.group(1) == "un" else _nw[m.group(1)], m.group(2)), p)   # "cinque minuti" = 5 minuti
+    p = re.sub(r"\b(?:fai |far |fa' )?lampegg\w+", "accendi lampeggio", p)   # "fai lampeggiare le luci" = accendi con flash
+    p = re.sub(r"\b(resta|rimane|restano|rimangono) (apert\w|acces\w|chius\w|spent\w) (\d+ (?:second|minut|or[ae]))", r"\1 \2 per \3", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante la) notte\s*$", ", ma solo se e' buio", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante il) giorno\s*$", ", ma solo se e' giorno", p)
     _vv = {"apro": "si apre", "riapro": "si apre", "chiudo": "si chiude", "richiudo": "si chiude", "accendo": "si accende", "spengo": "si spegne"}
@@ -1647,6 +1683,9 @@ def _costruisci(prompt, casa, notify, io, chiedi):
         else:
             if re.search(r"\b(?:metti|imposta)\b.*\b(?:luc\w*|lamp\w*|farett\w*|piantana)\b.*\bal\s+\d{1,3}\s*(?:%|per ?cento)", seg):
                 seg = re.sub(r"\b(?:metti|imposta)\b", "accendi", seg)
+            flash = bool(re.search(r"\blampeggio\b", seg))
+            if flash:
+                seg = re.sub(r"\s*\blampeggio\b", "", seg)
             mv = re.search(r"\b(%s)\b" % _V, seg)
             if mv:
                 parola = mv.group(1)
@@ -1749,6 +1788,10 @@ def _costruisci(prompt, casa, notify, io, chiedi):
                     else:
                         return None
                     a = {"action": "%s.%s" % (d, srv), "target": {"entity_id": es[0] if len(es) == 1 else es}}
+                    if flash:
+                        if d != "light":
+                            return None
+                        a["data"] = {"flash": "long"}
                     if lum is not None and d == "cover" and ((srv == "close_cover" and lum >= 100) or (srv == "open_cover" and lum <= 0)):
                         return None   # "chiudi al 100%": ambiguo (100 in HA = aperta), meglio chiedere
                     if lum is not None and d == "cover" and 0 <= lum <= 100:   # "chiudi le tapparelle al 30%" = posizione 30
