@@ -637,7 +637,7 @@ def evento(testo, casa, io, avv):
     if re.fullmatch(r"(?:inizia a piovere|piove|comincia a piovere)", t):
         w = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "weather"]
         return fine({"trigger": "state", "entity_id": w[0], "to": ["rainy", "pouring"]}) if w else None
-    m = re.fullmatch(r"(?:vedo (?:del )?movimento|(?:si )?rileva(?:to)?(?: del)? movimento|c'e'? movimento|(?:il sensore )?(?:vede|sente) movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
+    m = re.fullmatch(r"(?:vedo (?:del )?movimento|(?:si )?rileva(?:to)?(?: del)? movimento|c'e'? movimento|(?:passa|entra) (?:qualcuno|una persona|gente)|qualcuno (?:passa|entra)|(?:il sensore )?(?:vede|sente) movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
     m2 = re.fullmatch(r"(?:non c'e'? (?:piu )?movimento|non (?:si )?rileva (?:piu )?movimento|non c'e (?:piu )?movimento)(?: (?:in|nel|nella|nell'|all'|al|alla) ?(.+))?", t)
     if m or m2:
         dove = (m or m2).group(1)
