@@ -1784,6 +1784,9 @@ def _testo_evento(tr, casa, originale):
     if t.get("trigger") == "state" and isinstance(t.get("to"), str) and t.get("for"):
         d = t["for"]
         n = casa.nome(e)
+        if t["to"] in ("locked", "unlocked"):
+            return "%s %s da %s" % (n, "sbloccata" if t["to"] == "unlocked" else "bloccata",
+                                  " ".join("%s %s" % (v, {"minutes": "minuti", "seconds": "secondi", "hours": "ore"}[k]) for k, v in d.items()))
         if t["to"] in ("on", "off") and re.search(r"\b(porta|finestra|garage|sportello|cancello|portone|basculante)\b", n.lower()):
             return "%s %s da %s" % (n, ("aperta" if re.search(r"\b(porta|finestra)\b", n.lower()) else "aperto") if t["to"] == "on" else ("chiusa" if re.search(r"\b(porta|finestra)\b", n.lower()) else "chiuso"),
                                   " ".join("%s %s" % (v, {"minutes": "minuti", "seconds": "secondi", "hours": "ore"}[k]) for k, v in d.items()))
