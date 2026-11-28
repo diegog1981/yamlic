@@ -821,6 +821,10 @@ def condizione(testo, casa, avv):
     c = {"condition": "state", "entity_id": eid, "state": stato}
     if isinstance(eid, list):
         return c
+    if core._dom(eid) == "climate":   # il clima non e mai "on": acceso = qualsiasi modo tranne off
+        if stato == "off":
+            return {"condition": "state", "entity_id": eid, "state": "off"}
+        return {"condition": "not", "conditions": [{"condition": "state", "entity_id": eid, "state": ["off", "unavailable"]}]}
     if core._dom(eid) == "media_player" and stato == "off":
         c = {"condition": "state", "entity_id": eid, "state": ["off", "standby"]}
     if core._dom(eid) == "media_player" and stato == "on":
@@ -991,6 +995,7 @@ def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
     # "quando arrivo a casa e fa buio" = evento + condizione (non due eventi)
     p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
+    p = re.sub(r"\b((?:quando|appena|se) [^,]+?) (?:e|ed) ((?:il|lo|la|l'|le|i|gli) [^,]+? (?:e'|e) (?:ancora |gia )?(?:acces|spent|apert|chius)[aoei])\b,? (?=(?:%s)\b)" % _V, r"\1, ma solo se \2, ", p)   # "quando X e la luce e accesa spegni Y": la seconda parte e una condizione
     p = re.sub(r"^se (torno|arrivo|rientro|esco|torna|arriva|rientra|esce)\b", r"quando \1", p)
     p = ore_lettere(p)
     p = re.sub(r"^(?:dai|ecco|allora|ok|senti|scusa|ciao|buongiorno|buonasera|per favore|per piacere|ti prego)\b[, ]*", "", p)
