@@ -1,11 +1,12 @@
 name: "Yamlic"
-version: "0.4.44"
+version: "0.4.45"
 slug: "yamlic"
 description: "Yaml Intelligent Creator: scrivi cosa vuoi in italiano, Yamlic scrive l'automazione per Home Assistant. Ogni installazione puo anche essere nodo o smistatore della rete."
 url: "https://github.com/diegog1981/yamlic"
 image: "ghcr.io/diegog1981/yamlic"
 arch:
   - amd64
+  - aarch64
 init: false
 startup: application
 boot: manual
