@@ -15,6 +15,21 @@ SYSTEM = (
     "L'alias deve essere in italiano."
 )
 
+def _regole_extra():
+    """Regole facoltative in app/regole_ai.md: si aggiungono in coda al prompt, non lo sostituiscono (il modello e addestrato su quello base)."""
+    try:
+        t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "regole_ai.md"), encoding="utf-8").read()
+    except OSError:
+        return ""
+    righe = [l.strip().lstrip("-* ").strip() for l in t.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    return " ".join(righe)[:800]
+
+
+SYSTEM_BASE = SYSTEM
+_EXTRA = _regole_extra()
+if _EXTRA:
+    SYSTEM = SYSTEM + " Regole aggiuntive: " + _EXTRA
+
 # ---------- opzioni ----------
 def load_options():
     o = {}
