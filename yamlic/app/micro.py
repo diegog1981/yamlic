@@ -703,12 +703,12 @@ def evento(testo, casa, io, avv):
         avv.append("fine ciclo %s = potenza sotto 5 W per 3 minuti (e prima era sopra): controlla soglia e durata sul tuo elettrodomestico" % m.group(1))
         tr = {"trigger": "numeric_state", "entity_id": pot[0], "below": 5, "for": per or {"minutes": 3}}
         return tr, []
-    m = re.fullmatch(r"(?:la |l')?(temperatura|umidita|potenza) (?:del |della |dell'|in |nel |nella )?(.+?) (supera|va sopra|sale sopra|passa|e' sopra|e' piu' di|scende sotto|va sotto|e' sotto|e' meno di) (?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
+    m = re.fullmatch(r"(?:la |l')?(temperatura|umidita|potenza|batteria) (?:del |della |dell'|in |nel |nella )?(.+?) (supera|va sopra|sale sopra|passa|e' sopra|e' piu' di|scende sotto|va sotto|e' sotto|e' meno di) (?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
     if m:
-        classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power"}[m.group(1)]
+        classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power", "batteria": "battery"}[m.group(1)]
         parole = _resto(m.group(2))
         cand = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "sensor" and casa.vivo(s) and casa.classe(s) == classe
-                and (classe == "power" or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
+                and (classe in ("power", "battery") or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
                 and parole and all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
         if len(cand) != 1:
             if not cand:
@@ -762,12 +762,12 @@ def condizione(testo, casa, avv):
         if not e and not _n_binari(casa, ("motion", "occupancy"), mm.group(2)):
             _manca(casa, t, "un sensore di movimento%s" % ((" in " + mm.group(2)) if mm.group(2) else ""), "per esempio usa la presenza di una persona, oppure un orario")
         return {"condition": "state", "entity_id": e, "state": "off" if mm.group(1) else "on"} if e else None
-    mt = re.fullmatch(r"(?:la )?(temperatura|umidita|potenza) (?:del |della |dell'|in |nel |nella )?(.+?) (?:e'|sale|scende|va|resta|rimane|supera) ?(?:ancora )?(sopra|sotto|oltre|piu di|meno di|supera|al di sopra di|al di sotto di)? ?(?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
+    mt = re.fullmatch(r"(?:la )?(temperatura|umidita|potenza|batteria) (?:del |della |dell'|in |nel |nella )?(.+?) (?:e'|sale|scende|va|resta|rimane|supera) ?(?:ancora )?(sopra|sotto|oltre|piu di|meno di|supera|al di sopra di|al di sotto di)? ?(?:i |il |le )?(\d+(?:[.,]\d+)?)\s*(?:gradi|°c?|%|per ?cento|watt|w)?", t)
     if mt:
-        classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power"}[mt.group(1)]
+        classe = {"temperatura": "temperature", "umidita": "humidity", "potenza": "power", "batteria": "battery"}[mt.group(1)]
         parole = _resto(mt.group(2))
         cand = [s["entity_id"] for s in casa.states if core._dom(s["entity_id"]) == "sensor" and casa.vivo(s) and casa.classe(s) == classe
-                and (classe == "power" or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
+                and (classe in ("power", "battery") or not re.search(r"batter|\bcpu\b|chip|processor|\besp\b|dispositivo|device|interna", casa.testo(s)))
                 and parole and all(any(re.search(r"\b%s\b" % g, casa.testo(s)) for g in core.room_words(w)) for w in parole)]
         if not cand:
             _manca(casa, t, "un sensore di %s in %s" % (mt.group(1), mt.group(2)), "per esempio un orario, oppure un altro sensore")
@@ -1874,6 +1874,10 @@ def _testo_evento(tr, casa, originale):
     e = t.get("entity_id", "")
     if t.get("trigger") == "numeric_state" and ("lavatrice" in e or "lavastoviglie" in e or "asciugatrice" in e):
         return "%s: ciclo finito" % casa.nome(e).rsplit(" ", 1)[0]
+    if t.get("trigger") == "numeric_state" and e and e != "zone.home" and ("below" in t or "above" in t) and e in casa.by:
+        u = (casa.by[e].get("attributes") or {}).get("unit_of_measurement", "")
+        v = t.get("below", t.get("above"))
+        return "%s: %s %s%s" % (casa.nome(e), "sotto" if "below" in t else "sopra", v, (" " + u) if u and u != "%" else u)
     if e == "zone.home":
         return "Casa vuota" if "below" in t else "Qualcuno e tornato a casa"
     if t.get("trigger") == "state" and isinstance(t.get("to"), str) and t.get("for"):
