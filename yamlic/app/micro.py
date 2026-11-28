@@ -1011,11 +1011,12 @@ def parlato(p):
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante la) notte\s*$", ", ma solo se e' buio", p)
     p = re.sub(r",? (?:ma )?(?:solo |soltanto )(?:di|durante il) giorno\s*$", ", ma solo se e' giorno", p)
     _vv = {"apro": "si apre", "riapro": "si apre", "chiudo": "si chiude", "richiudo": "si chiude", "accendo": "si accende", "spengo": "si spegne"}
-    mo = re.search(r"\b(?:quando|appena|se) (?:io )?(apro|chiudo|richiudo|riapro|accendo|spengo) ((?:il|lo|la|l'|le|i|gli) ?[^,]+?)(?=,| (?:%s)\b| e quando\b|$)" % _V, p)
+    mo = re.search(r"\b(?:quando|appena|se) (?:io )?(apro|chiudo|richiudo|riapro|accendo|spengo) ((?:il|lo|la|l'|le|i|gli) ?[^,]+?)(?=,| (?:%s|metti|imposta|porta|riporta|rimanda|abbassa|alza|riduci|aumenta|avvisami|avvertimi|notificami|mandami|inviami)\b| e quando\b|$)" % _V, p)
     if mo:   # "quando apro la porta" = "quando la porta si apre"; "quando la richiudo" = la stessa cosa
         ogg = mo.group(2)
         p = p[:mo.start(1)] + ogg + " " + _vv[mo.group(1)] + p[mo.end():]
         p = re.sub(r"\b(quando|appena|se) (?:la|lo|le|li|l') ?(apro|chiudo|richiudo|riapro|accendo|spengo)\b", lambda m: "%s %s %s" % (m.group(1), ogg, _vv[m.group(2)]), p)
+    p = re.sub(r"\b(?:abbassa|riduci|alza|aumenta|porta|regola)(?:re)? (le luci|la luce|i faretti|le lampade|la lampada|l'illuminazione)(?= .*?\bal \d+ ?(?:%|per ?cento))", r"imposta \1", p)   # "abbassa le luci al 30%" = imposta al 30%
     p = re.sub(r"\b(resta|rimane|restano|e') sbloccat([ao])\b", r"\1 apert\2", p)
     p = re.sub(r"\bsi sblocca\b", "si apre", p)   # serratura sbloccata = serratura aperta (stato unlocked)
     p = re.sub(r"^(.+?) (\d+ (?:second\w|minut\w|or[ae])) dopo che (?:il movimento (?:e' )?(?:finito|finisce|cessa|smette)|non c'e' piu movimento)((?: (?:in|nel|nella|nell'|all'|al|alla) [^,]+?)?)((?:,? (?:ma )?solo .+)?)$",
@@ -1234,8 +1235,12 @@ def scena(prompt, casa, notify, io, chiedi):
         st = _STATO_SCENA.get(srv)
         if not st or dom not in ("light", "switch", "cover", "media_player", "fan"):
             return None
+        dati = dict(a.get("data") or {})
+        pct = dati.pop("brightness_pct", None)
+        if dati:   # colore, temperatura, durata...: la scena non sa scriverli, meglio non perderli in silenzio
+            return None
         for e in _lista((a.get("target") or {}).get("entity_id")):
-            stati[e] = st
+            stati[e] = {"state": st, "brightness": int(round(float(pct) * 255 / 100))} if pct is not None and dom == "light" else st
     if tieni:
         ids, resto = bersagli(tieni, casa, [])
         if not ids or _resto(resto):   # parole cercate anche nel codice dell'entita ("striscia" in light.striscia_luminosa)
