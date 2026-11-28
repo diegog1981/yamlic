@@ -1610,6 +1610,29 @@ def _costruisci(prompt, casa, notify, io, chiedi):
             if not cand:
                 return None
             azioni.append({"action": "media_player.volume_set", "target": {"entity_id": cand[0]}, "data": {"volume_level": int(mn_.group(1)) / 100}})
+        elif re.search(r"\b(?:termostato|climatizzatore|condizionatore|riscaldamento)\b", seg) and re.search(r"\b(?:in )?modalita (?:di )?(?:caldo|freddo|raffrescamento|raffreddamento|riscaldamento|deumidific\w+|dry|heat|cool|auto|ventilazione)\b|\bin (?:caldo|freddo|raffrescamento|raffreddamento|deumidificazione|ventilazione)\b", seg):
+            _modi = (("caldo", "heat"), ("riscaldamento", "heat"), ("heat", "heat"), ("freddo", "cool"), ("raffrescamento", "cool"), ("raffreddamento", "cool"), ("cool", "cool"),
+                     ("deumidific", "dry"), ("dry", "dry"), ("ventilazione", "fan_only"), ("auto", "auto"))
+            mm_ = re.search(r"(?:\bin )?(?:modalita (?:di )?)?\b(caldo|freddo|raffrescamento|raffreddamento|riscaldamento|deumidific\w+|dry|heat|cool|auto|ventilazione)\b", seg[re.search(r"\bmodalita\b|\bin (?:caldo|freddo|raffrescamento|raffreddamento|deumidificazione|ventilazione)\b", seg).start():])
+            modo = next((v for k, v in _modi if mm_ and mm_.group(1).startswith(k)), None)
+            mg = re.search(r"\b(?:a|ai|su)\s+(\d{1,2}(?:[.,]5)?)\s*(?:gradi|°c?)", seg)
+            resto = seg
+            if mm_:
+                resto = _togli(resto, re.search(r"(?:\bin )?(?:modalita (?:di )?)?\b%s\b" % re.escape(mm_.group(1)), resto))
+            if mg:
+                resto = _togli(resto, re.search(r"\b(?:a|ai|su)\s+%s\s*(?:gradi|°c?)" % re.escape(mg.group(1)), resto))
+            resto = re.sub(r"\b(?:accendi|attiva|imposta|metti|porta|regola)\b", " ", resto)
+            ids, resto = apparecchi(resto, casa, avv)
+            if not modo or not ids or _resto(resto):
+                return None
+            modi_ok = ((casa.by.get(ids[0]) or {}).get("attributes") or {}).get("hvac_modes")
+            if modi_ok and modo not in modi_ok:
+                avv.append("%s non ha la modalita %s (ha: %s)" % (casa.nome(ids[0]), modo, ", ".join(modi_ok)))
+                return None
+            azioni.append({"action": "climate.set_hvac_mode", "target": {"entity_id": ids[0]}, "data": {"hvac_mode": modo}})
+            if mg:
+                gr = float(mg.group(1).replace(",", ".")); gr = int(gr) if gr == int(gr) else gr
+                azioni.append({"action": "climate.set_temperature", "target": {"entity_id": ids[0]}, "data": {"temperature": gr}})
         elif re.search(r"\b(?:termostato|climatizzatore|condizionatore|riscaldamento)\b", seg) and re.search(r"\b(?:a|ai|su)\s+\d{1,2}(?:[.,]5)?\s*(?:gradi|°)", seg):
             mg = re.search(r"\b(?:a|ai|su)\s+(\d{1,2}(?:[.,]5)?)\s*(?:gradi|°c?)", seg)
             resto = _togli(seg, mg)
