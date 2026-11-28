@@ -971,6 +971,8 @@ def ore_lettere(p):
 
 def parlato(p):
     """Forme parlate -> forme che le regole capiscono (usata anche dal controllo finale)."""
+    # "quando arrivo a casa e fa buio" = evento + condizione (non due eventi)
+    p = re.sub(r"\b(quando|appena) ((?:arrivo|torno|rientro|esco|arriva|torna|rientra|esce|si apre|si chiude|passa|entra)\b[^,]*?) (?:e|ed) (?:fa|e'|e) (?:gia )?(buio|notte)\b", r"\1 \2, ma solo se e \3", p)
     p = ore_lettere(p)
     p = re.sub(r"^(?:dai|ecco|allora|ok|senti|scusa|ciao|buongiorno|buonasera|per favore|per piacere|ti prego)\b[, ]*", "", p)
     p = re.sub(r"\b(?:tipo|diciamo|praticamente|cioe'?|magari|per favore|per piacere|per cortesia|ti prego|grazie(?: mille)?|mi raccomando|eh|insomma|quindi|ovviamente|semplicemente)\b,?", " ", p)

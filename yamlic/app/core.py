@@ -1822,6 +1822,12 @@ def coerente(y, prompt):
             return False
         if re.search(r"\bpassa|passaggio|si muove|rilev\w* movimento|c'e movimento|c'e' movimento", p) and not re.search(r"\bcasa\b|nessuno in|esco|torn|rientr|arriv", p):
             return False   # un passaggio non e la presenza di casa
+    if "zone.home" in t and re.search(r"zone\.home\n\s+to: '?0'?", t) and re.search(r"\btorn|rientr|arriv", p):
+        return False   # "arrivo" non e zone.home = 0
+    if re.search(r"condition: time\n\s+after: '?(?:1[6-9]|2[0-3])", t) and re.search(r"condition: sun\n\s+before: sunrise", t) and "condition: or" not in t:
+        return False   # dopo le 23 E prima dell'alba insieme non e mai vero (serve OR)
+    if re.search(r"\bfinche non\b|\bfino a quando\b|\bfinche (?:e|resta|rimane)\b|\bripet\w* (?:ogni|la notifica|l'avviso)|\bogni \d+ (?:second|minut|or)\w* finche", p) and not re.search(r"\brepeat:|wait_for_trigger|wait_template|\buntil:|\bwhile:|timer\.", t):
+        return False   # "ripeti ogni 5 minuti finche non chiudo" richiede un ciclo
     if re.search(r"poca luce|scarsa luce|poca luminosita|troppo buio|\bluminosita\b", p) and not re.search(r"illuminance|lux|luminosit|sun\.|sun\b|after:|before:", t):
         return False
     if re.search(r"robot|aspirapolvere", p) and re.search(r"finit|fermat|bloccat", p) and not re.search(r"trigger: state\n\s*entity_id: vacuum", t):
