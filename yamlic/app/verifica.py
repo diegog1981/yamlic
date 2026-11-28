@@ -203,7 +203,8 @@ def controlla(prompt, y, states):
     dom_az = {a["action"].split(".")[0] for a in comandi}
     verbi_yaml = {a["action"].split(".")[1] for a in comandi}
     cmd = r"\b(?:accendi|spegni|accendere|spegnere|riaccendi)\w*"
-    if re.search(r"\b(?:accendi|accendere|riaccendi)\w*", q) and "turn_on" not in verbi_yaml and not dom_az & {"scene", "script"}:
+    hvac_on = any(a["action"] == "climate.set_hvac_mode" and (a.get("data") or {}).get("hvac_mode") not in (None, "off") for a in comandi)
+    if re.search(r"\b(?:accendi|accendere|riaccendi)\w*", q) and "turn_on" not in verbi_yaml and not hvac_on and not dom_az & {"scene", "script"}:
         err.append("manca l'azione di accensione")
     if re.search(r"\b(?:spegni|spegnere)\w*", q) and not verbi_yaml & {"turn_off", "toggle"}:
         err.append("manca l'azione di spegnimento")
