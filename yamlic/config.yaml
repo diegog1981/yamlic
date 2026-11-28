@@ -1,5 +1,5 @@
 name: "Yamlic"
-version: "0.4.53"
+version: "0.4.54"
 slug: "yamlic"
 description: "Yaml Intelligent Creator: scrivi cosa vuoi in italiano, Yamlic scrive l'automazione per Home Assistant. Ogni installazione puo anche essere nodo o smistatore della rete."
 url: "https://github.com/diegog1981/yamlic"
@@ -33,16 +33,6 @@ options:
   llm_url: ""
   llm_key: ""
   io_person: ""
-  scomponi: true
-  voto_adattivo: true
-  ripara: true
-  ibrido: true
-  micro: true
-  correzioni: true
-  domande: true
-  mappa: true
-  grammatica: false
-  regole_ai: true
 schema:
   modo: "list(auto|locale|rete)"
   usa_rete: bool
@@ -58,13 +48,3 @@ schema:
   llm_url: "str?"
   llm_key: "password?"
   io_person: "str?"
-  scomponi: bool
-  voto_adattivo: bool
-  ripara: bool
-  ibrido: bool
-  micro: bool
-  correzioni: bool
-  domande: bool
-  mappa: bool
-  grammatica: bool
-  regole_ai: bool

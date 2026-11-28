@@ -41,36 +41,6 @@ configuration:
   io_person:
     name: Your person entity (optional)
     description: "Pick your person entity, for example person.john, so that \"when I leave\" refers to you."
-  scomponi:
-    name: Split long requests
-    description: "If you write several things each with its own trigger, Yamlic splits them into separate automations and generates them in parallel."
-  voto_adattivo:
-    name: Check with more nodes when the answer is doubtful
-    description: "Asks one node first. If the answer is not convincing it asks more nodes and picks the most common structure."
-  ripara:
-    name: Repair model errors
-    description: Automatically fixes non-existent services, unresolved notifications, lights swapped with the TV, rain triggers, wrong room.
-  micro:
-    name: "Micro-sentences"
-    description: "Splits the request into parts and builds them locally with rules (Italian only)."
-  mappa:
-    name: Use the home map
-    description: Hides technical entities and uses your corrections from "La tua casa".
-  domande:
-    name: Questions on unclear parts
-    description: When part of the request is unclear, Yamlic asks you and offers choices.
-  correzioni:
-    name: "AI corrections"
-    description: "If the final check finds errors, they are sent back to the model (up to 2 times) and the best answer is kept."
-  ibrido:
-    name: Final check with the compiler
-    description: "Turns the automation into a plan, fixes non-existent entities, thresholds on the wrong sensor and actions that repeat the trigger, then rewrites clean YAML."
-  grammatica:
-    name: Grammar (experimental)
-    description: "Forces the model to use only the listed entities and services. Off by default: needs testing."
-  regole_ai:
-    name: Extra rules for the model
-    description: "Appends the rules in regole_ai.md to the prompt (never invent entities, keep all conditions...). Turn off to compare."
 network:
   8099/tcp: Yamlic page
   8100/tcp: Relay port (only if you enable the relay role)
